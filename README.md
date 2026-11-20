@@ -5,6 +5,15 @@ under static and quasi-static moving loads. It combines an editable desktop
 interface, numerical response plots, illustrative 3D visualization, and
 reproducible model and result exports.
 
+Two interfaces are available:
+- **Desktop application:** full model editing, moving-load analysis, design studies
+  and optional 3D visualization.
+- **Browser application:** a lightweight Streamlit interface for running supplied
+  redundancy examples, comparing results and downloading numerical data.
+
+Both interfaces use the same numerical analysis modules. The software is an
+educational analysis tool, not a certified bridge-design application.
+
 ## Features
 
 - Create and edit nodes, members, supports, material properties and nodal loads.
@@ -19,24 +28,48 @@ reproducible model and result exports.
 
 ## Installation
 
-Python 3.10 or newer is required. The desktop application has been tested with
-Python 3.13 on Linux; other platforms have not been independently verified.
+### Requirements
 
-Run these commands from the application directory:
+- Git, if downloading the source by cloning the repository.
+- Python 3.10 or newer for the desktop source; Python 3.13 is the tested version
+  for both interfaces and is recommended for the pinned browser dependencies.
+- An internet connection to install Python dependencies.
+- A desktop display for the Qt interface and a working OpenGL graphics stack for 3D.
+
+The application has been tested on Linux. Other operating systems have not been
+independently verified. The commands below use a Linux/macOS shell.
+
+### Download the source
+
+The browser interface and its configuration are on the `BridgeTruss` branch:
+
+```bash
+git clone --branch BridgeTruss https://github.com/deskaygraphics/BridgeTruss.git
+cd BridgeTruss
+```
+
+If you already have this repository, open a terminal in its directory instead.
+Run subsequent commands from the directory containing `main.py` and `web/`.
+Use a separate virtual environment for each interface.
+
+### Desktop application
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python main.py
 ```
+For later sessions, activate the same environment and run `python main.py`.
 
 The desktop stack uses NumPy, PySide6, Matplotlib, PyVista and PyVistaQt.
 `requirements-dev.txt` adds testing and linting dependencies.
 `requirements-lock.txt` records the package versions used for desktop verification;
 it is not a cross-platform installation guarantee.
 
-The 3D view requires a working OpenGL graphics stack. To disable it:
+The desktop requirements install the graphics packages even if 3D is disabled.
+To run the desktop application without initializing the 3D renderer:
 
 ```bash
 BRIDGETRUSS_NO_3D=1 python main.py
@@ -45,19 +78,66 @@ BRIDGETRUSS_NO_3D=1 python main.py
 If Qt reports a missing xcb cursor library on Ubuntu, check that the system package
 `libxcb-cursor0` is installed.
 
-## Basic usage
+### Browser application
+
+With Python 3.13 installed, start a new terminal in the repository directory, then run:
+
+```bash
+python3.13 -m venv .venv-web
+source .venv-web/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r web/requirements.txt
+python -m streamlit run web/app.py
+```
+
+Open the local URL printed by Streamlit, usually `http://localhost:8501`.
+Keep the terminal running while using the application. Press Ctrl+C in that
+terminal to stop the server.
+
+The browser requirements install Streamlit, NumPy and Matplotlib; Qt and VTK are
+not required. The browser interface does not include the full desktop geometry
+editor or the interactive 3D scene. A localhost address is accessible on your own
+computer, not a public hosting URL.
+
+## Desktop usage
+
+### Analyze a supplied example
+
+1. Launch the desktop application and click **Open**.
+2. Select `examples/pratt_vehicle.json` and confirm replacing the current model.
+3. Inspect the nodes, member connectivity, supports, properties and loads.
+4. Click **Analyze**. The example's saved vehicle settings determine whether the
+   displayed load case includes the vehicle.
+5. Read member forces/stresses, nodal displacements and support reactions in the
+   numerical tables. Use the force and deformation tabs to inspect the diagrams.
+6. Use **Compute Signed Envelopes** to find extrema over the complete vehicle
+   passage, rather than relying on the current slider position.
+7. Click **Export Results** and choose a parent directory for a new result bundle.
+
+### Create or modify a model
 
 1. Select a preset or create nodes and members. Assign supports, loads, elastic
    modulus and cross-sectional area. Property controls apply to newly added
    members; use **Edit Member Properties** to change existing members.
 2. Click **Analyze** to calculate forces, stresses, displacements and reactions.
-3. For vehicle loading, use **Select Deck Nodes**, enable moving loads and set
-   the axle forces and spacing. Existing static loads remain active unless cleared.
-4. Use **Compute Signed Envelopes** for the complete passage and **Influence Lines**
-   for responses to a downward unit load. Envelope accuracy does not depend on
-   the animation step or frame rate.
-5. Use **Save Model/Open** for JSON models and **Export Results** for a result bundle.
-   Invalid or unstable models are rejected; editing inputs clears stale results.
+3. Save a stable, complete model with **Save Model**. Use **Open** to load it again.
+   Incomplete or unstable models are rejected.
+
+### Apply moving loads
+
+1. Use **Select Deck Nodes** to define the load-transfer path. Presets already
+   select their bottom-chord deck joints.
+2. Enable moving loads and enter the front/rear axle forces and their spacing.
+3. Use the position slider or **Play** to inspect successive quasi-static states.
+4. Click **Compute Signed Envelopes** for minimum/maximum responses and the
+   corresponding front-axle positions over the full crossing.
+5. Use **Influence Lines** for responses to a downward 1 N load; these exclude
+   existing static loads.
+
+Existing static loads remain active unless explicitly removed with **Clear Static
+Loads**. Envelope accuracy does not depend on the animation step or frame rate.
+Editing analysis inputs clears stale results; recalculate the required studies
+before exporting.
 
 Connections are explicit: crossing bars are not automatically joined, and adding
 an intermediate node does not split an existing member. Deck nodes must be distinct,
@@ -66,7 +146,7 @@ horizontal and have distinct x coordinates.
 ## Visualization and editing
 
 The 2D force and deformation diagrams support wheel zoom, drag-to-pan and
-Double-click-to-fit. **View Controls** provides label scaling and a shared fit action.
+double-click-to-fit. **View Controls** provides label scaling and a shared fit action.
 Displayed deformation is magnified; numerical tables contain the actual movements.
 
 The optional **Interactive 3D** tab supports member, joint and load selection,
@@ -82,6 +162,15 @@ member IDs remain aligned across candidates. The study reports stability status,
 force redistribution, nodal displacements and full-passage extrema. Force diagrams
 use the same load position for every candidate; unrelated envelope peaks are not
 shown as one simultaneous load case. **Enlarge Comparison** opens a larger view.
+
+To run the supplied redundant-bridge example:
+
+1. Open `examples/redundant_bridge.json`.
+2. Select **Redundancy Study** and choose original member **18**.
+3. Keep the default area factors `1,0.75,0.5,0.25,0`, or enter your own.
+4. Click **Run Redundancy Study**, then choose a candidate to compare.
+5. Inspect the case summary, member-force changes and common-case displacements.
+   Rejected candidates display a reason instead of a finite response.
 
 **Design Exploration** evaluates a finite grid of heights and chord/web area factors.
 Feasibility means satisfying the entered displacement and axial-stress screening
@@ -103,6 +192,19 @@ python run_redundancy_study.py --output /tmp/bridgetruss-study
 
 The output directory must not already exist. Add `--static` for static-only bridge
 studies, or use `--model`, `--member` and `--factors` to analyze another saved model.
+
+## Saving models and exporting results
+
+- **Save Model:** stores geometry, properties, supports, static loads, deck nodes
+  and vehicle settings in versioned JSON. Numerical results are recalculated on load.
+- **Export Results:** creates a new timestamped directory containing `members.csv`,
+  `nodes.csv` and `analysis.json`. Calculated envelopes add `envelopes.csv`.
+- A calculated redundancy study adds `redundancy.json`, summary/member/node/envelope
+  CSV files and PNG comparison figures.
+- Browser downloads provide a reproducible study JSON and a summary CSV.
+
+Original member IDs are preserved within a redundancy study. Deleting a member
+from the active desktop model renumbers its remaining members.
 
 ## Numerical method and limitations
 
@@ -162,22 +264,53 @@ commit. Each new clone needs its own `pre_commit install` step.
 
 These fast checks do not replace the test suite or analytical benchmarks.
 
-## Browser interface
+## Browser usage
 
-The lightweight Streamlit interface uses the same numerical modules as the desktop
-application, without installing Qt or VTK. It provides bounded examples, area-factor
-controls, vehicle inputs, force/displacement comparisons, analytical checks and
-CSV/JSON downloads. It does not provide the full desktop geometry editor or 3D view.
+After starting Streamlit using the installation instructions above:
 
-From this repository directory:
+1. Choose an example:
+   - **Redundant bridge — remove M18:** compare the bridge with a weakened or removed
+     additional diagonal.
+   - **Redundant triangle — analytical check:** compare the static triangle with
+     its independently derived hand equations.
+   - **Determinate bridge — essential M1:** inspect the effect of weakening or
+     removing an essential member.
+2. Set **Selected member area remaining (%)**. Zero removes the member; the
+   original baseline is retained for comparison.
+3. For bridge examples, enable or disable **Include complete vehicle passage**.
+   Expand **Vehicle inputs (optional)** to adjust axle forces and spacing.
+   The triangle always uses its prescribed static load.
+4. Click **Run example**.
+5. Inspect **Comparison figures**, **Numerical results** and **Assumptions**.
+   Expand the independent-verification section for hand-reference values,
+   computed values, errors and tolerances.
+6. Download the study JSON or summary CSV if needed.
+
+Changing an input clears the previous result; click **Run example** again.
+An accepted stiffness solution is not a structural safety assessment.
+
+### Browser tests
+
+With the browser environment activated:
 
 ```bash
-python3 -m venv .venv-web
-source .venv-web/bin/activate
-python -m pip install -r web/requirements.txt
-python -m streamlit run web/app.py
+python -m pip install pytest
+python -m pytest web -q
 ```
 
-Open the local URL printed by Streamlit. Browser dependencies are declared separately
-in `web/requirements.txt`. To run its tests, install `pytest` in that environment and
-run `python -m pytest web -q`.
+## Troubleshooting
+
+- **Missing Python package:** activate the intended virtual environment and install
+  its requirements using `python -m pip`. Desktop and browser dependencies are separate.
+- **Qt xcb cursor error on Ubuntu:** check that the system package
+  `libxcb-cursor0` is installed.
+- **OpenGL or 3D initialization failure:** try `BRIDGETRUSS_NO_3D=1 python main.py`
+  or use the browser interface for the supplied numerical examples.
+- **Unstable or ill-conditioned model:** review supports, connectivity and member
+  properties. The solver does not add artificial stiffness to conceal instability.
+- **Invalid deck path:** select at least two distinct existing joints at a common
+  elevation, with different x coordinates.
+- **Results disappear after an edit:** this prevents stale output. Run the analysis
+  or study again with the new inputs.
+- **Browser port already in use:** choose another port, for example
+  `python -m streamlit run web/app.py --server.port 8502`, and use the printed URL.
