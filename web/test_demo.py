@@ -56,7 +56,7 @@ def test_streamlit_run_change_inputs_and_reject():
     pytest.importorskip("streamlit")
     from streamlit.testing.v1 import AppTest
 
-    app = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30).run()
+    app = AppTest.from_file(str(Path(__file__).parent / "demo_app.py"), default_timeout=30).run()
     assert not app.exception
     assert not app.metric
     app.button[0].click().run()

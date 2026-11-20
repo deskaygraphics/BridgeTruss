@@ -8,8 +8,9 @@ reproducible model and result exports.
 Two interfaces are available:
 - **Desktop application:** full model editing, moving-load analysis, design studies
   and optional 3D visualization.
-- **Browser application:** a lightweight Streamlit interface for running supplied
-  redundancy examples, comparing results and downloading numerical data.
+- **Browser application:** a desktop-style Streamlit workspace with model editing,
+  interactive 2D/3D views, moving loads, result tables, design/redundancy studies
+  and desktop-compatible model files. The original guided demo is also available.
 
 Both interfaces use the same numerical analysis modules. The software is an
 educational analysis tool, not a certified bridge-design application.
@@ -94,10 +95,10 @@ Open the local URL printed by Streamlit, usually `http://localhost:8501`.
 Keep the terminal running while using the application. Press Ctrl+C in that
 terminal to stop the server.
 
-The browser requirements install Streamlit, NumPy and Matplotlib; Qt and VTK are
-not required. The browser interface does not include the full desktop geometry
-editor or the interactive 3D scene. A localhost address is accessible on your own
-computer, not a public hosting URL.
+The browser requirements install Streamlit, NumPy, Matplotlib and Plotly; Qt and
+VTK are not required. Run from the repository root to use the included dark
+theme configuration. A localhost address is accessible on your own computer,
+not a public hosting URL.
 
 ## Desktop usage
 
@@ -201,7 +202,9 @@ studies, or use `--model`, `--member` and `--factors` to analyze another saved m
   `nodes.csv` and `analysis.json`. Calculated envelopes add `envelopes.csv`.
 - A calculated redundancy study adds `redundancy.json`, summary/member/node/envelope
   CSV files and PNG comparison figures.
-- Browser downloads provide a reproducible study JSON and a summary CSV.
+- Browser downloads provide desktop-compatible model JSON, member CSV,
+  displacement-history CSV, PNG figures and a ZIP of the result bundle.
+  Calculated redundancy studies add detailed study CSVs and comparison figures.
 
 Original member IDs are preserved within a redundancy study. Deleting a member
 from the active desktop model renumbers its remaining members.
@@ -268,26 +271,53 @@ These fast checks do not replace the test suite or analytical benchmarks.
 
 After starting Streamlit using the installation instructions above:
 
-1. Choose an example:
-   - **Redundant bridge — remove M18:** compare the bridge with a weakened or removed
-     additional diagonal.
-   - **Redundant triangle — analytical check:** compare the static triangle with
-     its independently derived hand equations.
-   - **Determinate bridge — essential M1:** inspect the effect of weakening or
-     removing an essential member.
-2. Set **Selected member area remaining (%)**. Zero removes the member; the
-   original baseline is retained for comparison.
-3. For bridge examples, enable or disable **Include complete vehicle passage**.
-   Expand **Vehicle inputs (optional)** to adjust axle forces and spacing.
-   The triangle always uses its prescribed static load.
-4. Click **Run example**.
-5. Inspect **Comparison figures**, **Numerical results** and **Assumptions**.
-   Expand the independent-verification section for hand-reference values,
-   computed values, errors and tolerances.
-6. Download the study JSON or summary CSV if needed.
+1. **Full workspace** starts with an analyzed Pratt truss. Use **New Project**
+   for an empty model, or the sidebar's **New / presets / open** section to
+   choose Pratt/Warren/Howe, open a supplied example, or upload desktop JSON.
+   Replacing a project requires confirmation.
+2. Expand sidebar tools to add/move nodes, attach/edit/delete members, assign
+   loads and supports, select deck joints or clear static loads. Submit the
+   relevant form to apply an edit. Incomplete drafts are allowed; **Undo last
+   edit** restores the previous model. Click **Analyze** after editing.
+3. Use **2D View**, **Axial Forces** and **Deformation** for interactive diagrams.
+   Scroll to zoom, drag to pan, or double-click to fit. **View controls** changes
+   labels, coloring and camera settings without changing structural results.
+4. **Interactive 3D** shows an illustrative extruded bridge, road and truck.
+   Drag to orbit. **Scene selection** highlights a node/member/load and exposes
+   edit/removal controls. Use **Add / attach member** to connect two joints.
+   Browser selection controls replace Qt's right-click picking; this is not a
+   pixel-identical Qt window.
+5. Apply **Moving vehicle loads** settings to enable a two-axle vehicle. Use the
+   slider or **Play / Pause / Reset**. The 3D truck and wheels animate locally
+   in the browser between numerical response steps; the scene and camera stay
+   mounted rather than being rebuilt for every visual frame. The caption
+   distinguishes the visual front position from the solved position used by
+   tables, force colors and deformation. Response steps are nominally 250 ms;
+   delayed refreshes catch up using elapsed time without backfilling history.
+   Pause solves the current position. Playback is not physical time or dynamics.
+6. **Compute Signed Envelopes** evaluates the full passage independently of
+   playback. Other tabs provide influence lines, design exploration, redundancy
+   of any active member, displacement history and equal-volume comparisons.
+   The latter requires preset-compatible ten-node geometry.
+7. Expand **Save model / export results** below the tables. Save model JSON or
+   member CSV, or prepare a downloadable ZIP and PNG figures. Chart camera
+   buttons also download images, including the 3D view. Model saves retain the
+   existing stable/complete-model validation.
 
-Changing an input clears the previous result; click **Run example** again.
-An accepted stiffness solution is not a structural safety assessment.
+Each browser session owns its own model and results; refreshing/reconnecting
+can start a new session, so download your model before closing the page.
+Model/vehicle changes clear affected results and playback history. Manual
+position changes and Reset clear history; the latest 1000 solved frames are
+retained. The interactive workspace allows up to 200 nodes, 800 members and
+2 MB model uploads to bound per-session computation.
+
+Choose **Guided demo** in the sidebar for the original preset-based audience
+examples, independent triangle checks and study downloads. It does not modify
+the full workspace's model.
+
+An accepted stiffness solution is not a structural safety assessment. Both
+interfaces share the solver, model format and engineering limitations;
+decorative 3D geometry adds no stiffness, mass or self-weight.
 
 ### Browser tests
 
@@ -297,6 +327,17 @@ With the browser environment activated:
 python -m pip install pytest
 python -m pytest web -q
 ```
+The browser suite covers atomic model edits, undo, session isolation,
+desktop-compatible JSON/scenario round trips, numerical parity, invalidation,
+history, exports and Streamlit interactions. An additional opt-in test exercises
+real Chrome, including WebGL views, playback, uploads and downloaded files.
+With Playwright and Google Chrome installed and the local server running:
+
+```bash
+BRIDGETRUSS_WEB_BROWSER=1 python -m pytest web/test_browser.py -q
+```
+
+Set `BRIDGETRUSS_CHROME` if Chrome is installed outside `/usr/bin/google-chrome`.
 
 ## Troubleshooting
 
