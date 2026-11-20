@@ -152,9 +152,11 @@ python -m pre_commit install
 python -m pre_commit run --all-files
 ```
 
-Commits run pinned Ruff linting/formatting hooks and checks for YAML, JSON and TOML
-syntax, merge conflicts, oversized new files, private keys, trailing whitespace
-and missing final newlines. Virtual environments and generated caches are excluded.
+Commits run pinned Ruff linting/formatting hooks, spelling checks, requirements-file
+sorting, notebook-output stripping, and checks for YAML, JSON and TOML syntax,
+merge conflicts, new files larger than 500 KB, private keys, trailing whitespace
+and missing final newlines. Notebook checks run only when notebooks are present.
+Virtual environments and generated caches are excluded.
 If a hook reformats a file, review and stage that file again before retrying the
 commit. Each new clone needs its own `pre_commit install` step.
 

@@ -1,4 +1,4 @@
 -r requirements.txt
+pre-commit>=4.2,<5
 pytest>=9,<10
 ruff>=0.14,<1
-pre-commit>=4.2,<5
