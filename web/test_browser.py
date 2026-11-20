@@ -156,6 +156,50 @@ def test_full_workspace_in_chrome(tmp_path):
         browser.close()
 
 
+@pytest.mark.parametrize(
+    "viewport", [{"width": 1680, "height": 1050}, {"width": 1280, "height": 760}]
+)
+def test_right_controls_scroll_without_moving_dashboard(viewport):
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as p:
+        browser = p.chromium.launch(
+            executable_path=os.environ.get("BRIDGETRUSS_CHROME", "/usr/bin/google-chrome"),
+            headless=True,
+        )
+        page = browser.new_page(viewport=viewport)
+        page.goto("http://127.0.0.1:8501/")
+        panel = page.locator(".st-key-right_controls")
+        panel.wait_for()
+        page.wait_for_function("""() => {
+            const panel = document.querySelector('.st-key-right_controls');
+            return panel && getComputedStyle(panel).overscrollBehaviorY === 'contain';
+        }""")
+        chart = page.get_by_test_id("stPlotlyChart")
+        chart.wait_for()
+        size = panel.evaluate("e => ({height: e.clientHeight, content: e.scrollHeight})")
+        assert size["content"] > size["height"]
+        assert size["height"] == pytest.approx(viewport["height"] - 176, abs=2)
+        main = page.get_by_test_id("stMain")
+        page_scroll = main.evaluate("e => e.scrollTop")
+        chart_y = chart.bounding_box()["y"]
+        panel.hover(position={"x": 5, "y": 100})
+        page.mouse.wheel(0, 400)
+        page.wait_for_function(
+            "() => document.querySelector('.st-key-right_controls').scrollTop > 0"
+        )
+        assert chart.bounding_box()["y"] == pytest.approx(chart_y, abs=0.5)
+        assert main.evaluate("e => e.scrollTop") == page_scroll
+        # Reaching either edge must not hand the wheel gesture to the main page.
+        for end, delta in [("e.scrollHeight", 600), ("0", -600)]:
+            panel.evaluate(f"e => {{ e.scrollTop = {end}; }}")
+            page.mouse.wheel(0, delta)
+            page.wait_for_timeout(250)
+            assert chart.bounding_box()["y"] == pytest.approx(chart_y, abs=0.5)
+            assert main.evaluate("e => e.scrollTop") == page_scroll
+        assert page.get_by_test_id("stException").count() == 0
+        browser.close()
+
+
 def test_smooth_motion_keeps_scene_and_camera_mounted():
     playwright = pytest.importorskip("playwright.sync_api")
     with playwright.sync_playwright() as p:

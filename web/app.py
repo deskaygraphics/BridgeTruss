@@ -46,6 +46,16 @@ h3 {font-size:1.05rem!important}
 [data-testid="stMetricValue"] {font-size:1.45rem}
 .stButton>button,.stDownloadButton>button {border-radius:4px}
 [data-testid="stVerticalBlockBorderWrapper"] {border-color:#3b4d61}
+.st-key-right_controls {
+    height:calc(100vh - 11rem)!important;
+    height:calc(100dvh - 11rem)!important;
+    min-height:16rem;
+    flex:0 0 auto;
+    overflow-y:auto;
+    overscroll-behavior-y:contain;
+    scrollbar-gutter:stable;
+    padding-right:0.5rem;
+}
 </style>
 """
 
@@ -688,7 +698,7 @@ def results(w):
 def workspace_body(w):
     # Only the selected tab is rendered, especially important during playback.
     central, controls = st.columns([4.0, 1.15], gap="medium")
-    with controls:
+    with controls, st.container(border=False, key="right_controls"):
         vehicle_controls(w)
         options = view_controls()
     with central:
