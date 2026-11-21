@@ -29,11 +29,12 @@ for _module in (_workspace, _plots):
 from redundancy_plots import draw_comparison
 from web.animation import animated_scene, load_animation_runtime
 from web.plots import CONFIG, base_layout, diagram, diagram_png, scene
+from web.responsive import phone_layout
 from web.workspace import KINDS, Workspace, csv_bytes, numbers
 
 
 st.set_page_config(
-    page_title="BridgeTruss | Planar Analysis", layout="wide", initial_sidebar_state="expanded"
+    page_title="BridgeTruss | Planar Analysis", layout="wide", initial_sidebar_state="auto"
 )
 
 STYLE = """
@@ -47,8 +48,8 @@ h3 {font-size:1.05rem!important}
 .stButton>button,.stDownloadButton>button {border-radius:4px}
 [data-testid="stVerticalBlockBorderWrapper"] {border-color:#3b4d61}
 .st-key-right_controls {
-    height:calc(100vh - 11rem)!important;
-    height:calc(100dvh - 11rem)!important;
+    height:calc(100vh - 17rem)!important;
+    height:calc(100dvh - 17rem)!important;
     min-height:16rem;
     flex:0 0 auto;
     overflow-y:auto;
@@ -56,8 +57,41 @@ h3 {font-size:1.05rem!important}
     scrollbar-gutter:stable;
     padding-right:0.5rem;
 }
+.st-key-workspace_toolbar button {min-height:44px}
+.st-key-controls_visible label {min-height:44px;align-items:center}
+@media (max-width:767px) {
+    .block-container {padding-left:0.75rem;padding-right:0.75rem}
+    h1 {font-size:1.3rem!important}
+    .st-key-workspace_panels [data-testid="stColumn"]:has(.st-key-right_controls) {
+        position:fixed;
+        top:8rem;
+        right:0.5rem;
+        width:min(22rem, calc(100vw - 1rem))!important;
+        max-width:calc(100vw - 1rem)!important;
+        z-index:990;
+        padding:0.5rem;
+        border:1px solid #4a6076;
+        border-radius:8px;
+        background:#202e3d;
+        box-shadow:0 8px 32px #0008;
+    }
+    .st-key-right_controls {
+        height:calc(100vh - 10rem)!important;
+        height:calc(100dvh - 10rem)!important;
+        min-height:0;
+    }
+}
 </style>
 """
+
+
+def remember_controls_choice():
+    st.session_state["controls_user_choice"] = True
+
+
+def hide_controls():
+    st.session_state["controls_user_choice"] = True
+    st.session_state["controls_visible"] = False
 
 
 def act(function, *args, message=None, **kwargs):
@@ -75,6 +109,11 @@ def table(rows, **kwargs):
 
 
 def chart(fig, key):
+    if st.session_state.get("phone_layout", False):
+        fig.update_layout(height=320, margin={"l": 35, "r": 10, "t": 65, "b": 35})
+        fig.update_layout(
+            title={"text": fig.layout.title.text.replace(" · ", "<br>", 1), "font": {"size": 12}}
+        )
     st.plotly_chart(fig, key=key, theme=None, config=CONFIG, width="stretch")
 
 
@@ -697,8 +736,18 @@ def results(w):
 
 def workspace_body(w):
     # Only the selected tab is rendered, especially important during playback.
-    central, controls = st.columns([4.0, 1.15], gap="medium")
+    if not st.session_state.get("controls_visible", True):
+        # Keep widgets mounted: removing them would discard unsubmitted inputs.
+        st.html("""<style>
+            .st-key-workspace_panels [data-testid="stColumn"]:has(.st-key-right_controls) {
+                display:none;
+            }
+        </style>""")
+    with st.container(key="workspace_panels"):
+        central, controls = st.columns([4.0, 1.15], gap="medium")
     with controls, st.container(border=False, key="right_controls"):
+        if st.button("Hide controls", on_click=hide_controls, width="stretch"):
+            st.rerun()
         vehicle_controls(w)
         options = view_controls()
     with central:
@@ -789,13 +838,25 @@ def main():
         upgraded.playing = False
         upgraded.play_generation = getattr(w, "play_generation", 0)
         st.session_state["workspace"] = w = upgraded
-    title, analyze, new = st.columns([5, 1, 1])
-    title.title("BridgeTruss | Planar Analysis")
-    if analyze.button("Analyze", type="primary", width="stretch"):
-        w.pause()
-        act(w.analyze, message="Analysis completed using the shared desktop solver.")
-    if new.button("New Project", width="stretch"):
-        st.session_state["show_new"] = True
+    mobile = phone_layout()
+    st.session_state["phone_layout"] = bool(mobile)
+    if not st.session_state.get("controls_user_choice", False):
+        st.session_state["controls_visible"] = not bool(mobile)
+    st.title("BridgeTruss | Planar Analysis")
+    with st.container(key="workspace_toolbar", horizontal=True, vertical_alignment="center"):
+        if st.button("Analyze", type="primary"):
+            w.pause()
+            act(w.analyze, message="Analysis completed using the shared desktop solver.")
+        if st.button("New Project"):
+            st.session_state["show_new"] = True
+        st.toggle(
+            "Controls",
+            key="controls_visible",
+            on_change=remember_controls_choice,
+            help="Show or hide vehicle and view settings without changing your model.",
+        )
+    if mobile:
+        st.caption("Model tools: top-left sidebar arrow. Vehicle / view settings: Controls.")
     if st.session_state.get("show_new"):
         st.warning("New Project removes the active model, loads and calculated results.")
         yes, no = st.columns(2)

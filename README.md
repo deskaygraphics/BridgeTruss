@@ -304,6 +304,14 @@ After starting Streamlit using the installation instructions above:
    buttons also download images, including the 3D view. Model saves retain the
    existing stable/complete-model validation.
 
+On phones, the model sidebar starts collapsed; use the top-left sidebar arrow
+to open it and the sidebar's collapse button to close it again. The toolbar's
+**Controls** switch opens vehicle and view settings in a floating, independently
+scrollable panel; **Hide controls** closes it. Hidden panels preserve settings,
+form inputs and analysis results. On larger screens, Controls toggles the
+right-hand column and hiding it expands the dashboard. Your panel choice is
+retained when resizing or rotating the browser.
+
 Each browser session owns its own model and results; refreshing/reconnecting
 can start a new session, so download your model before closing the page.
 Model/vehicle changes clear affected results and playback history. Manual
@@ -330,7 +338,8 @@ python -m pytest web -q
 The browser suite covers atomic model edits, undo, session isolation,
 desktop-compatible JSON/scenario round trips, numerical parity, invalidation,
 history, exports and Streamlit interactions. An additional opt-in test exercises
-real Chrome, including WebGL views, playback, uploads and downloaded files.
+real Chrome, including WebGL views, playback, uploads, downloaded files,
+phone-width layouts, panel toggles and independent scrolling.
 With Playwright and Google Chrome installed and the local server running:
 
 ```bash

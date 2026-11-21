@@ -339,6 +339,27 @@ def test_workspace_ui_export_and_guided_demo():
     assert a.session_state["workspace"].model.members[0].A == 0.005
 
 
+def test_controls_visibility_preserves_model_results_and_widget_settings():
+    a = app()
+    w = a.session_state["workspace"]
+    result = w.model.results["U"].copy()
+    widget(a.checkbox, "Show node IDs").uncheck().run()
+    widget(a.selectbox, "Color by").select("Stress").run()
+    widget(a.toggle, "Controls").uncheck().run()
+    assert not a.exception
+    assert not a.session_state["controls_visible"]
+    widget(a.button, "Analyze").click().run()
+    assert not a.session_state["controls_visible"]
+    widget(a.toggle, "Controls").check().run()
+    assert not a.exception
+    assert not widget(a.checkbox, "Show node IDs").value
+    assert widget(a.selectbox, "Color by").value == "Stress"
+    np.testing.assert_allclose(a.session_state["workspace"].model.results["U"], result)
+    widget(a.button, "Hide controls").click().run()
+    assert not a.exception
+    assert not a.session_state["controls_visible"]
+
+
 def test_number_lists_are_finite():
     assert numbers(" 1, 0.5, 0 ") == [1, 0.5, 0]
     for text in ("", "x", "1,nan", "1,inf"):

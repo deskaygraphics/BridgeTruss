@@ -178,7 +178,7 @@ def test_right_controls_scroll_without_moving_dashboard(viewport):
         chart.wait_for()
         size = panel.evaluate("e => ({height: e.clientHeight, content: e.scrollHeight})")
         assert size["content"] > size["height"]
-        assert size["height"] == pytest.approx(viewport["height"] - 176, abs=2)
+        assert size["height"] == pytest.approx(viewport["height"] - 272, abs=2)
         main = page.get_by_test_id("stMain")
         page_scroll = main.evaluate("e => e.scrollTop")
         chart_y = chart.bounding_box()["y"]
@@ -196,6 +196,102 @@ def test_right_controls_scroll_without_moving_dashboard(viewport):
             page.wait_for_timeout(250)
             assert chart.bounding_box()["y"] == pytest.approx(chart_y, abs=0.5)
             assert main.evaluate("e => e.scrollTop") == page_scroll
+        assert page.get_by_test_id("stException").count() == 0
+        browser.close()
+
+
+@pytest.mark.parametrize("width,height", [(320, 740), (390, 844)])
+def test_phone_panels_reopen_without_losing_settings(width, height, tmp_path):
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as p:
+        browser = p.chromium.launch(
+            executable_path=os.environ.get("BRIDGETRUSS_CHROME", "/usr/bin/google-chrome"),
+            headless=True,
+            args=["--enable-unsafe-swiftshader"],
+        )
+        page = browser.new_page(
+            viewport={"width": width, "height": height}, is_mobile=True, has_touch=True
+        )
+        page.goto("http://127.0.0.1:8501/")
+        chart = page.get_by_test_id("stPlotlyChart")
+        chart.wait_for()
+        panel = page.locator(".st-key-right_controls")
+        panel.wait_for(state="hidden")
+        sidebar = page.get_by_test_id("stSidebar")
+        assert sidebar.get_attribute("data-collapsed") == "true"
+        assert chart.bounding_box()["width"] >= width - 32
+        baseline = page.get_by_test_id("stMetricValue").first.inner_text()
+        page.get_by_test_id("stExpandSidebarButton").click()
+        page.get_by_role("heading", name="Model tools", exact=True).wait_for()
+        assert sidebar.get_attribute("data-collapsed") == "false"
+        sidebar.get_by_role("button", name="Collapse sidebar", exact=True).click()
+        page.get_by_text("Controls", exact=True).click()
+        panel.wait_for()
+        box = panel.bounding_box()
+        assert box["x"] >= 0 and box["x"] + box["width"] <= width
+        assert box["y"] + box["height"] <= height
+        front = page.get_by_role("spinbutton", name="Front axle (kN)", exact=True)
+        front.fill("95")
+        # Hiding the panel also retains unsubmitted form edits on the client.
+        page.get_by_role("button", name="Hide controls", exact=True).click()
+        panel.wait_for(state="hidden")
+        page.get_by_text("Controls", exact=True).click()
+        panel.wait_for()
+        assert float(front.input_value()) == 95
+        page.get_by_role("button", name="Apply vehicle settings", exact=True).click()
+        page.get_by_text("Workspace updated.", exact=True).wait_for()
+        assert page.get_by_test_id("stMetricValue").first.inner_text() == baseline
+        page.get_by_text("Show node IDs", exact=True).click()
+        page.get_by_role("button", name="Hide controls", exact=True).click()
+        panel.wait_for(state="hidden")
+        page.get_by_role("button", name="Analyze", exact=True).click()
+        page.get_by_text("Controls", exact=True).click()
+        panel.wait_for()
+        assert not page.get_by_role("checkbox", name="Show node IDs", exact=True).is_checked()
+        assert float(front.input_value()) == 95
+        page.get_by_role("button", name="Hide controls", exact=True).click()
+        panel.wait_for(state="hidden")
+        page.get_by_role("tab", name="Interactive 3D", exact=True).click()
+        page.get_by_test_id("bridge-live-scene").locator("canvas").first.wait_for()
+        assert page.get_by_test_id("bridge-live-scene").bounding_box()["width"] <= width
+        assert page.evaluate("document.documentElement.scrollWidth") <= width
+        assert page.get_by_test_id("stException").count() == 0
+        page.screenshot(path=str(tmp_path / f"phone-{width}.png"), full_page=True)
+        browser.close()
+
+
+def test_desktop_controls_toggle_expands_dashboard_and_preserves_choice():
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as p:
+        browser = p.chromium.launch(
+            executable_path=os.environ.get("BRIDGETRUSS_CHROME", "/usr/bin/google-chrome"),
+            headless=True,
+        )
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.goto("http://127.0.0.1:8501/")
+        panel = page.locator(".st-key-right_controls")
+        panel.wait_for()
+        chart = page.get_by_test_id("stPlotlyChart")
+        chart.wait_for()
+        original_width = chart.bounding_box()["width"]
+        page.get_by_text("Controls", exact=True).click()
+        panel.wait_for(state="hidden")
+        page.wait_for_function(
+            """width =>
+            document.querySelector('[data-testid="stPlotlyChart"]').getBoundingClientRect().width > width
+        """,
+            arg=original_width + 100,
+        )
+        page.get_by_role("button", name="Analyze", exact=True).click()
+        assert not panel.is_visible()
+        page.set_viewport_size({"width": 390, "height": 844})
+        page.wait_for_timeout(400)
+        assert not panel.is_visible()
+        page.get_by_text("Controls", exact=True).click()
+        panel.wait_for()
+        page.set_viewport_size({"width": 1680, "height": 1050})
+        page.wait_for_timeout(400)
+        assert panel.is_visible()
         assert page.get_by_test_id("stException").count() == 0
         browser.close()
 
