@@ -1645,6 +1645,11 @@ class Main(QMainWindow):
             return
         try:
             model, state = load_model(path)
+            if "vehicles" in state:
+                raise ValueError(
+                    "Traffic-profile projects require the web workspace. The desktop supports "
+                    "the original single truck only. The current model has not been replaced."
+                )
             if state:
                 controls = (
                     ("front_N", self.axle_front, 1000),

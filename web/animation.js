@@ -1,4 +1,4 @@
-// A persistent Plotly scene. Only the truck mesh is transformed between solves.
+// A persistent scene. All vehicle meshes transform together between solves.
 export default function ({ parentElement, data }) {
     const host = parentElement.querySelector(".bridge-live-scene");
     const graph = host.querySelector(".bridge-live-plot");
@@ -22,6 +22,7 @@ export default function ({ parentElement, data }) {
     state.packet = data;
     state.pending = data.figure;
     let cancelled = false;
+    let ownFrame = 0;
 
     function frontAt(time) {
         const c = state.packet.clock;
@@ -36,7 +37,7 @@ export default function ({ parentElement, data }) {
         const base = trace.meta.front;
         const x = trace.x.map(v => v + front - base);
         const z = [...trace.z];
-        const angle = -front / 0.42;
+        const angle = -front / (trace.meta.wheel_radius || 0.42);
         const sin = Math.sin(angle), cos = Math.cos(angle);
         for (const wheel of trace.meta.wheels) {
             for (let i = wheel.start; i < wheel.stop; i++) {
@@ -54,8 +55,10 @@ export default function ({ parentElement, data }) {
         host.dataset.frames = String(state.draws);
         host.dataset.frontX = String(front);
         host.dataset.playing = String(state.playing);
+        host.dataset.vehicleCount = String(state.vehicles?.length || 0);
         const waiting = state.playing && performance.now() - state.received > 1000;
-        label.textContent = `Visual front x = ${front.toFixed(3)} m · ` +
+        const reference = state.packet.clock.vehicle_count > 1 ? "lead front" : "front";
+        label.textContent = `Visual ${reference} x = ${front.toFixed(3)} m · ` +
             `results / colors at x = ${state.packet.clock.solved.toFixed(3)} m` +
             (waiting ? " · waiting for server" : "");
     }
@@ -69,10 +72,12 @@ export default function ({ parentElement, data }) {
             figure.layout.scene.camera = graph.layout.scene.camera;
         }
         state.cameraKey = cameraKey;
-        state.vehicle = figure.data.findIndex(t => t.meta?.role === "vehicle");
-        state.template = state.vehicle < 0 ? null : structuredClone(figure.data[state.vehicle]);
-        if (state.template) {
-            Object.assign(figure.data[state.vehicle], pose(state.template, front));
+        state.vehicles = figure.data.flatMap((trace, index) =>
+            trace.meta?.role === "vehicle" ?
+                [{index, template: structuredClone(trace), offset: trace.meta.front_offset_m || 0}] : []
+        );
+        for (const vehicle of state.vehicles) {
+            Object.assign(figure.data[vehicle.index], pose(vehicle.template, front - vehicle.offset));
         }
         if (state.packet.camera === "Follow vehicle") {
             figure.layout.scene.camera.center.x =
@@ -80,34 +85,39 @@ export default function ({ parentElement, data }) {
                 Math.max(state.packet.clock.hi - state.packet.clock.lo, 1);
         }
         return window.Plotly.react(graph, figure.data, figure.layout, {
-            ...state.packet.config, responsive: true,
+            ...state.packet.config, responsive: false,
         }).then(() => { state.ready = true; report(front); });
     }
 
     async function update(time) {
         if (cancelled || generation !== state.mounted || !host.isConnected) return;
-        state.frame = requestAnimationFrame(update);
+        ownFrame = requestAnimationFrame(update);
+        state.frame = ownFrame;
         if (state.busy || !window.Plotly) return;
         const front = frontAt(time);
-        if (!state.pending && (!state.playing || !state.template)) return;
+        if (!state.pending && (!state.playing || !state.vehicles?.length)) return;
         // Do not queue more WebGL work than the browser can finish.
         state.busy = true;
         try {
             if (state.pending) {
                 await renderSnapshot(front);
             } else {
-                const geometry = pose(state.template, front);
+                const indices = state.vehicles.map(vehicle => vehicle.index);
+                const geometries = state.vehicles.map(vehicle =>
+                    pose(vehicle.template, front - vehicle.offset)
+                );
+                const update = {x: geometries.map(g => g.x), z: geometries.map(g => g.z)};
                 if (state.packet.camera === "Follow vehicle") {
                     await window.Plotly.update(
-                        graph, { x: [geometry.x], z: [geometry.z] },
+                        graph, update,
                         { "scene.camera.center.x":
                             (front - (state.packet.clock.lo + state.packet.clock.hi) / 2) /
                             Math.max(state.packet.clock.hi - state.packet.clock.lo, 1) },
-                        [state.vehicle],
+                        indices,
                     );
                 } else {
                     await window.Plotly.restyle(
-                        graph, { x: [geometry.x], z: [geometry.z] }, [state.vehicle],
+                        graph, update, indices,
                     );
                 }
                 report(front);
@@ -121,14 +131,23 @@ export default function ({ parentElement, data }) {
     }
 
     cancelAnimationFrame(state.frame);
-    state.frame = requestAnimationFrame(update);
+    ownFrame = requestAnimationFrame(update);
+    state.frame = ownFrame;
     const resize = new ResizeObserver(() => {
-        if (state.ready && !state.busy) window.Plotly.Plots.resize(graph);
+        if (state.ready && !state.busy && graph.isConnected &&
+            graph.getClientRects().length && graph.clientWidth && graph.clientHeight) {
+            // Plotly debounces resize; the tab may be hidden before it executes.
+            window.Plotly.Plots.resize(graph).catch(error => {
+                if (!String(error).includes("Resize must be passed")) {
+                    host.dataset.error = String(error);
+                }
+            });
+        }
     });
     resize.observe(host);
     return () => {
         cancelled = true;
-        cancelAnimationFrame(state.frame);
+        cancelAnimationFrame(ownFrame);
         resize.disconnect();
         // Data updates retain the graph. Release GPU resources only on unmount.
         setTimeout(() => {

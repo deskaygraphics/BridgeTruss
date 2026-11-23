@@ -7,6 +7,7 @@ from pathlib import Path
 
 from persistence import export_redundancy, load_model
 from redundancy import redundancy_study
+from traffic import scenario_axles
 
 
 EXAMPLES = Path(__file__).resolve().parent / "examples"
@@ -132,9 +133,7 @@ def main(argv=None):
         if args.model:
             model, scenario = load_model(args.model)
             axles = (
-                [(0, scenario["front_N"]), (scenario["spacing_m"], scenario["rear_N"])]
-                if scenario.get("enabled") and not args.static
-                else None
+                scenario_axles(scenario) if scenario.get("enabled") and not args.static else None
             )
             write_case(args.output, model, args.member, factors, axles)
             print(f"Study exported: {args.output}")
@@ -149,11 +148,7 @@ def main(argv=None):
             writer.writeheader()
             writer.writerows(checks)
         bridge, scenario = load_model(EXAMPLES / "redundant_bridge.json")
-        axles = (
-            None
-            if args.static
-            else [(0, scenario["front_N"]), (scenario["spacing_m"], scenario["rear_N"])]
-        )
+        axles = None if args.static else scenario_axles(scenario)
         write_case(args.output / "redundant_bridge", bridge, 18, factors, axles)
         determinate, _ = load_model(EXAMPLES / "pratt_vehicle.json")
         write_case(args.output / "determinate_bridge", determinate, 1, factors, axles)

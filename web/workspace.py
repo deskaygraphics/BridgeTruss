@@ -25,6 +25,7 @@ from moving_loads import (
 )
 from persistence import export_results, model_document, validate_document
 from redundancy import redundancy_study
+from traffic import positioned_vehicles, scenario_axles, traffic_scenario, validate_scenario
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -144,9 +145,14 @@ class Workspace:
         self.invalidate()
 
     def replace(self, model, scenario=None):
+        scenario = validate_scenario(scenario if scenario is not None else {})
         self.validate_geometry(model)
         self.model = deepcopy(model)
-        self.scenario = {**DEFAULT_SCENARIO, **(scenario or {})}
+        self.scenario = (
+            deepcopy(scenario)
+            if traffic_scenario(scenario)
+            else {**DEFAULT_SCENARIO, **(scenario or {})}
+        )
         self.undo_state = None
         self.selection = None
         self.invalidate()
@@ -214,10 +220,11 @@ class Workspace:
 
     @property
     def axles(self):
-        return [
-            (0.0, self.scenario["front_N"]),
-            (self.scenario["spacing_m"], self.scenario["rear_N"]),
-        ]
+        return scenario_axles(self.scenario)
+
+    @property
+    def vehicles(self):
+        return positioned_vehicles(self.scenario)
 
     @property
     def study_axles(self):
@@ -231,6 +238,8 @@ class Workspace:
         lo, hi = travel_limits(self.model, self.axles)
         # Include both axles fully outside the deck, just like the desktop.
         pad = max(hi - lo, 1.0) * 1e-8
+        if traffic_scenario(self.scenario):
+            pad = max(pad, 1.0)  # Clear all illustrative body overhangs as well as axles.
         return lo - pad + fraction * (hi - lo + 2 * pad)
 
     def playback_clock(self):
@@ -245,28 +254,40 @@ class Workspace:
             "lo": lo,
             "hi": hi,
             "solved": self.position,
+            "vehicle_count": len(self.vehicles),
         }
 
     @staticmethod
     def validate_precision(scenario):
-        # Main.open_project rejects values its Qt controls cannot represent.
-        for key, divisor, decimals in [
-            ("front_N", 1000, 2),
-            ("rear_N", 1000, 2),
-            ("spacing_m", 1, 2),
-            ("position_fraction", 1, 3),
-        ]:
-            value = scenario[key] / divisor
-            if not np.isclose(value, round(value, decimals), rtol=1e-12, atol=1e-12):
-                raise ValueError(f"{key} exceeds desktop control precision; adjust it explicitly")
+        # Keep saved values representable by their UI controls, without silent rounding.
+        groups = (
+            [(f"Vehicle {i + 1} ", v) for i, v in enumerate(scenario["vehicles"])]
+            if traffic_scenario(scenario)
+            else [("", scenario)]
+        )
+        for prefix, values in [("", {"position_fraction": scenario["position_fraction"]}), *groups]:
+            for key, divisor, decimals in [
+                ("front_N", 1000, 2),
+                ("rear_N", 1000, 2),
+                ("spacing_m", 1, 2),
+                ("gap_m", 1, 2),
+                ("position_fraction", 1, 3),
+            ]:
+                if key not in values:
+                    continue
+                value = values[key] / divisor
+                if not np.isclose(value, round(value, decimals), rtol=1e-12, atol=1e-12):
+                    raise ValueError(
+                        f"{prefix}{key} exceeds control precision; adjust it explicitly"
+                    )
 
     def configure(self, enabled, front_N, rear_N, spacing_m, step):
         scenario = {
-            **self.scenario,
             "enabled": enabled,
             "front_N": float(front_N),
             "rear_N": float(rear_N),
             "spacing_m": float(spacing_m),
+            "position_fraction": self.scenario["position_fraction"],
         }
         validate_axles([(0, front_N), (spacing_m, rear_N)])
         if (
@@ -281,6 +302,34 @@ class Workspace:
             deck_path(self.model)
         self.validate_precision(scenario)
         if scenario != self.scenario or step != self.response_step:
+            self.scenario = scenario
+            self.response_step = float(step)
+            self.invalidate()
+
+    def configure_traffic(self, enabled, vehicles, step):
+        scenario = validate_scenario(
+            {
+                "enabled": enabled,
+                "position_fraction": self.scenario["position_fraction"],
+                "vehicles": deepcopy(vehicles),
+            }
+        )
+        if not np.isfinite(step) or step <= 0:
+            raise ValueError("Response step must be finite and positive")
+        self.validate_precision(scenario)
+        if enabled:
+            deck_path(self.model)
+        # A lone Truck needs no extended fields; retain the original file contract.
+        if len(vehicles) == 1 and vehicles[0]["kind"] == "Truck":
+            first = vehicles[0]
+            scenario = {
+                "enabled": enabled,
+                "front_N": first["front_N"],
+                "rear_N": first["rear_N"],
+                "spacing_m": first["spacing_m"],
+                "position_fraction": scenario["position_fraction"],
+            }
+        if scenario != self.scenario or float(step) != self.response_step:
             self.scenario = scenario
             self.response_step = float(step)
             self.invalidate()
@@ -315,13 +364,16 @@ class Workspace:
 
     def play(self):
         if not self.scenario["enabled"]:
-            self.configure(
-                True,
-                self.scenario["front_N"],
-                self.scenario["rear_N"],
-                self.scenario["spacing_m"],
-                self.response_step,
-            )
+            if traffic_scenario(self.scenario):
+                self.configure_traffic(True, self.scenario["vehicles"], self.response_step)
+            else:
+                self.configure(
+                    True,
+                    self.scenario["front_N"],
+                    self.scenario["rear_N"],
+                    self.scenario["spacing_m"],
+                    self.response_step,
+                )
         self.analyze()
         if self.scenario["position_fraction"] >= 1:
             raise ValueError("Vehicle has exited. Reset before playing again.")
@@ -350,8 +402,7 @@ class Workspace:
         now = time.monotonic() if now is None else now
         elapsed = max(0.0, now - self._last_tick)
         self._last_tick = now
-        lo, hi = travel_limits(self.model, self.axles)
-        length = hi - lo + 2 * max(hi - lo, 1.0) * 1e-8
+        length = self.position_at(1) - self.position_at(0)
         self._play_elapsed += elapsed
         increment = self.response_step / length
         self._play_fraction = min(
@@ -390,6 +441,7 @@ class Workspace:
 
     def compute_envelopes(self):
         self.envelopes = envelope(self.model, self.axles)
+        self.annotate_traffic(self.envelopes)
         return self.envelopes
 
     def compute_influence(self):
@@ -413,12 +465,20 @@ class Workspace:
             density,
         )
         self.study_inputs = args
+        self.annotate_traffic(self.study)
         return self.study
 
     def study_member(self, member_id, factors):
         self.redundancy = redundancy_study(self.model, member_id, factors, self.study_axles)
         self.redundancy_inputs = (member_id, factors)
+        self.annotate_traffic(self.redundancy)
         return self.redundancy
+
+    def annotate_traffic(self, result):
+        if traffic_scenario(self.scenario):
+            result["position_reference"] = "leading vehicle front axle x (m)"
+            result["traffic_vehicles"] = deepcopy(self.vehicles)
+            result["traffic_enabled"] = self.scenario["enabled"]
 
     def load_json(self, content):
         if len(content) > 2_000_000:

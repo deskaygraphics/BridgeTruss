@@ -10,7 +10,9 @@ Two interfaces are available:
   and optional 3D visualization.
 - **Browser application:** a desktop-style Streamlit workspace with model editing,
   interactive 2D/3D views, moving loads, result tables, design/redundancy studies
-  and desktop-compatible model files. The original guided demo is also available.
+  and desktop-compatible single-truck model files. It also supports browser-only
+  traffic profiles with up to three simultaneous vehicles. The original guided
+  demo is also available.
 
 Both interfaces use the same numerical analysis modules. The software is an
 educational analysis tool, not a certified bridge-design application.
@@ -22,6 +24,8 @@ educational analysis tool, not a certified bridge-design application.
 - Calculate joint displacements, support reactions, axial forces and stresses.
 - Inspect magnified deformation, signed force diagrams and numerical diagnostics.
 - Define a horizontal deck path and a two-axle vehicle with adjustable forces and spacing.
+- In the full web workspace, combine one to three Car/Bus/Truck vehicles with
+  independently editable axle forces, wheelbases and following gaps.
 - Calculate influence lines and complete moving-load envelopes with governing axle positions.
 - Compare layouts at equal material volume and explore height/member-area combinations.
 - Study stiffness reduction and member removal without modifying the active model.
@@ -184,6 +188,8 @@ Example models in `examples/` include:
 - `benchmark_redundant.json`: triangle with an added load path.
 - `pratt_vehicle.json`: planar bridge with a two-axle vehicle.
 - `redundant_bridge.json`: bridge with an additional diagonal; M18 can be studied.
+- `traffic_three_vehicles.json`: the redundant bridge with a Truck, Car and Bus
+  together (version 2; full web workspace only).
 
 To generate reproducible redundancy results without opening the desktop interface:
 
@@ -287,8 +293,9 @@ After starting Streamlit using the installation instructions above:
    edit/removal controls. Use **Add / attach member** to connect two joints.
    Browser selection controls replace Qt's right-click picking; this is not a
    pixel-identical Qt window.
-5. Apply **Moving vehicle loads** settings to enable a two-axle vehicle. Use the
-   slider or **Play / Pause / Reset**. The 3D truck and wheels animate locally
+5. Apply **Moving vehicle loads** settings for the original truck or a
+   one-to-three-vehicle profile (see below). Use the slider or **Play / Pause /
+   Reset**. The 3D vehicles and wheels animate locally
    in the browser between numerical response steps; the scene and camera stay
    mounted rather than being rebuilt for every visual frame. The caption
    distinguishes the visual front position from the solved position used by
@@ -327,6 +334,53 @@ An accepted stiffness solution is not a structural safety assessment. Both
 interfaces share the solver, model format and engineering limitations;
 decorative 3D geometry adds no stiffness, mass or self-weight.
 
+### Two or three simultaneous vehicles (full web workspace)
+
+1. Open **Controls → Moving vehicle loads** and set **Number of vehicles** to
+   2 or 3. For a ready-made example, open `traffic_three_vehicles.json` from
+   **Supplied model** and click **Analyze**.
+2. Choose each vehicle's type. **Load preset for vehicle N** explicitly fills
+   example axle forces/wheelbase; merely changing the type does not overwrite
+   your custom values. The illustrative presets are Truck: 80/120 kN, 4 m;
+   Car: 8/7 kN, 2.7 m; Bus: 50/90 kN, 6 m. These are not regulatory design vehicles.
+3. Edit individual axle forces, wheelbases and follower gaps. Traffic-profile
+   wheelbases must be at least 1.2 m. A gap is measured from the previous
+   vehicle's **rear axle to the next front axle**, not bumper to bumper;
+   minimum 2 m, default 3 m. The original single-truck form retains its
+   legacy input range, including compact schematic axle pairs.
+4. Check **Enable moving loads**, then **Apply traffic settings**. A draft
+   warning means the inputs are not applied yet; figures/results still use
+   the displayed **Applied traffic** configuration.
+5. Use **Leading front axle position (%)**, **Play / Pause / Reset** and
+   **Interactive 3D**. Each vehicle has its own mesh and follows at a fixed
+   offset with the same direction and playback clock. Traffic profiles include
+   a one-metre visual margin at entry/exit so the bodies as well as all axles
+   clear the bridge. Original single-truck position mapping is unchanged.
+
+All active axle loads are combined with the static loads **once**. Current
+response, signed envelopes, design comparisons, redundancy studies and history
+use the applied traffic. The 2D diagrams show the combined nodal loads.
+Influence lines remain unit-load responses, independent of configured traffic.
+For traffic profiles, every reported `front_x_m`/front-position column means the
+**leading vehicle's front axle**, not a follower's position. The vehicle table
+shows individual front positions. Envelopes cover the passage of this particular
+fixed formation; they do not optimize independently placed vehicles, gaps or speeds.
+No opposing traffic, overtaking, collisions, dynamics or extra self-weight is modeled.
+
+The original single Truck still saves **version 1** JSON and opens on desktop.
+Car/Bus and multiple-vehicle profiles save **version 2**, including all vehicle
+types, forces, wheelbases and gaps. Reopen those files in the full web workspace.
+The desktop rejects version-2 traffic profiles before replacing the active
+model, rather than silently loading only the first vehicle. Older app versions
+also reject the new schema. Returning to a single Truck and applying settings
+restores version-1 saves.
+
+Result ZIPs include the complete versioned model plus traffic definitions and
+flattened axle offsets/forces in `analysis.json`; studies retain their position
+reference. The redundancy CLI also reads version-2 files and uses every axle.
+Guided demo remains the original single-truck audience example, with unchanged
+verified results.
+
 ### Browser tests
 
 With the browser environment activated:
@@ -339,7 +393,8 @@ The browser suite covers atomic model edits, undo, session isolation,
 desktop-compatible JSON/scenario round trips, numerical parity, invalidation,
 history, exports and Streamlit interactions. An additional opt-in test exercises
 real Chrome, including WebGL views, playback, uploads, downloaded files,
-phone-width layouts, panel toggles and independent scrolling.
+phone-width layouts, panel toggles, independent scrolling, simultaneous traffic,
+and versioned project save/reopen.
 With Playwright and Google Chrome installed and the local server running:
 
 ```bash

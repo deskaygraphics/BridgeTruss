@@ -31,6 +31,34 @@ def window(app, monkeypatch):
     app.processEvents()
 
 
+def test_traffic_project_is_rejected_before_replacing_desktop_model(window, monkeypatch, tmp_path):
+    from traffic import preset_vehicle
+
+    w = window
+    original_model = w.model
+    original_scenario = w.scenario()
+    path = tmp_path / "traffic.json"
+    save_model(
+        path,
+        w.model,
+        {
+            "enabled": True,
+            "position_fraction": 0.5,
+            "vehicles": [preset_vehicle("Truck"), preset_vehicle("Car", 3)],
+        },
+    )
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(path), ""))
+    questions = []
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *args: questions.append(args) or QMessageBox.No
+    )
+    w.open_project()
+    assert w.model is original_model
+    assert w.scenario() == original_scenario
+    assert not questions
+    assert len(w.test_errors) == 1 and "web workspace" in w.test_errors[0]
+
+
 def test_analysis_tabs_and_failure_invalidation(window):
     w = window
     assert w.model.results is not None

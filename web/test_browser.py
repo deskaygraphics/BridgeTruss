@@ -19,6 +19,20 @@ pytestmark = pytest.mark.skipif(
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def settle_controls(page, visible=True, allow_playing=False):
+    """Do not select stale copies retained briefly during a Streamlit rerun."""
+    page.wait_for_function(
+        """options => {
+        const panels = [...document.querySelectorAll('.st-key-right_controls')];
+        const idle = document.querySelector('[data-testid="stApp"]')
+            ?.getAttribute('data-test-script-state') === 'notRunning';
+        return (idle || options.allow_playing) && panels.length === 1 &&
+            Boolean(panels[0].getClientRects().length) === options.visible;
+    }""",
+        arg={"visible": visible, "allow_playing": allow_playing},
+    )
+
+
 def test_full_workspace_in_chrome(tmp_path):
     playwright = pytest.importorskip("playwright.sync_api")
     with playwright.sync_playwright() as p:
@@ -169,7 +183,7 @@ def test_right_controls_scroll_without_moving_dashboard(viewport):
         page = browser.new_page(viewport=viewport)
         page.goto("http://127.0.0.1:8501/")
         panel = page.locator(".st-key-right_controls")
-        panel.wait_for()
+        settle_controls(page)
         page.wait_for_function("""() => {
             const panel = document.querySelector('.st-key-right_controls');
             return panel && getComputedStyle(panel).overscrollBehaviorY === 'contain';
@@ -216,7 +230,7 @@ def test_phone_panels_reopen_without_losing_settings(width, height, tmp_path):
         chart = page.get_by_test_id("stPlotlyChart")
         chart.wait_for()
         panel = page.locator(".st-key-right_controls")
-        panel.wait_for(state="hidden")
+        settle_controls(page, False)
         sidebar = page.get_by_test_id("stSidebar")
         assert sidebar.get_attribute("data-collapsed") == "true"
         assert chart.bounding_box()["width"] >= width - 32
@@ -226,7 +240,7 @@ def test_phone_panels_reopen_without_losing_settings(width, height, tmp_path):
         assert sidebar.get_attribute("data-collapsed") == "false"
         sidebar.get_by_role("button", name="Collapse sidebar", exact=True).click()
         page.get_by_text("Controls", exact=True).click()
-        panel.wait_for()
+        settle_controls(page)
         box = panel.bounding_box()
         assert box["x"] >= 0 and box["x"] + box["width"] <= width
         assert box["y"] + box["height"] <= height
@@ -234,23 +248,23 @@ def test_phone_panels_reopen_without_losing_settings(width, height, tmp_path):
         front.fill("95")
         # Hiding the panel also retains unsubmitted form edits on the client.
         page.get_by_role("button", name="Hide controls", exact=True).click()
-        panel.wait_for(state="hidden")
+        settle_controls(page, False)
         page.get_by_text("Controls", exact=True).click()
-        panel.wait_for()
+        settle_controls(page)
         assert float(front.input_value()) == 95
         page.get_by_role("button", name="Apply vehicle settings", exact=True).click()
         page.get_by_text("Workspace updated.", exact=True).wait_for()
         assert page.get_by_test_id("stMetricValue").first.inner_text() == baseline
         page.get_by_text("Show node IDs", exact=True).click()
         page.get_by_role("button", name="Hide controls", exact=True).click()
-        panel.wait_for(state="hidden")
+        settle_controls(page, False)
         page.get_by_role("button", name="Analyze", exact=True).click()
         page.get_by_text("Controls", exact=True).click()
-        panel.wait_for()
+        settle_controls(page)
         assert not page.get_by_role("checkbox", name="Show node IDs", exact=True).is_checked()
         assert float(front.input_value()) == 95
         page.get_by_role("button", name="Hide controls", exact=True).click()
-        panel.wait_for(state="hidden")
+        settle_controls(page, False)
         page.get_by_role("tab", name="Interactive 3D", exact=True).click()
         page.get_by_test_id("bridge-live-scene").locator("canvas").first.wait_for()
         assert page.get_by_test_id("bridge-live-scene").bounding_box()["width"] <= width
@@ -270,12 +284,12 @@ def test_desktop_controls_toggle_expands_dashboard_and_preserves_choice():
         page = browser.new_page(viewport={"width": 1680, "height": 1050})
         page.goto("http://127.0.0.1:8501/")
         panel = page.locator(".st-key-right_controls")
-        panel.wait_for()
+        settle_controls(page)
         chart = page.get_by_test_id("stPlotlyChart")
         chart.wait_for()
         original_width = chart.bounding_box()["width"]
         page.get_by_text("Controls", exact=True).click()
-        panel.wait_for(state="hidden")
+        settle_controls(page, False)
         page.wait_for_function(
             """width =>
             document.querySelector('[data-testid="stPlotlyChart"]').getBoundingClientRect().width > width
@@ -288,11 +302,146 @@ def test_desktop_controls_toggle_expands_dashboard_and_preserves_choice():
         page.wait_for_timeout(400)
         assert not panel.is_visible()
         page.get_by_text("Controls", exact=True).click()
-        panel.wait_for()
+        settle_controls(page)
         page.set_viewport_size({"width": 1680, "height": 1050})
         page.wait_for_timeout(400)
         assert panel.is_visible()
         assert page.get_by_test_id("stException").count() == 0
+        browser.close()
+
+
+@pytest.mark.parametrize("count,width", [(2, 1680), (3, 1680), (3, 390)])
+def test_simultaneous_traffic_loads_animates_and_reopens(count, width, tmp_path):
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as p:
+        browser = p.chromium.launch(
+            executable_path=os.environ.get("BRIDGETRUSS_CHROME", "/usr/bin/google-chrome"),
+            headless=True,
+            args=["--enable-unsafe-swiftshader"],
+        )
+        page = browser.new_page(
+            viewport={"width": width, "height": 1050 if width > 767 else 844},
+            is_mobile=width < 768,
+            has_touch=width < 768,
+        )
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto("http://127.0.0.1:8501/")
+        page.get_by_test_id("stPlotlyChart").wait_for()
+        if width < 768:
+            settle_controls(page, False)
+            page.get_by_text("Controls", exact=True).click()
+        settle_controls(page)
+        combo = (
+            page.get_by_test_id("stSelectbox")
+            .filter(has_text="Number of vehicles")
+            .get_by_role("combobox")
+        )
+        combo.click()
+        page.get_by_role("option", name=str(count), exact=True).click()
+        page.get_by_role(
+            "spinbutton", name=f"Vehicle {count} front axle (kN)", exact=True
+        ).wait_for()
+        settle_controls(page)
+        page.get_by_text("Enable moving loads", exact=True).click()
+        assert page.get_by_role("checkbox", name="Enable moving loads", exact=True).is_checked()
+        page.get_by_role("button", name="Apply traffic settings", exact=True).click()
+        page.get_by_text(f"Applied {count} simultaneous vehicle(s).", exact=True).wait_for()
+        settle_controls(page)
+        rail = (
+            page.get_by_role("group", name="Leading front axle position (%)", exact=True)
+            .locator(":scope > div > div")
+            .first
+        )
+        rail.scroll_into_view_if_needed()
+        box = rail.bounding_box()
+        page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        settle_controls(page)
+        if width < 768:
+            page.get_by_role("button", name="Hide controls", exact=True).click()
+            settle_controls(page, False)
+        page.get_by_role("tab", name="Interactive 3D", exact=True).click()
+        host = page.get_by_test_id("bridge-live-scene")
+        host.locator("canvas").first.wait_for()
+        page.wait_for_function(
+            """count =>
+            Number(document.querySelector('.bridge-live-scene')?.dataset.vehicleCount) === count
+        """,
+            arg=count,
+        )
+        kinds = host.evaluate("h => h.bridgeAnimation.vehicles.map(v => v.template.meta.kind)")
+        assert kinds == ["Truck", "Car", "Bus"][:count]
+        if width < 768:
+            page.get_by_text("Controls", exact=True).click()
+            settle_controls(page)
+        page.get_by_role("button", name="Play", exact=True).click()
+        page.get_by_role("button", name="Pause", exact=True).wait_for()
+        if width < 768:
+            page.get_by_role("button", name="Hide controls", exact=True).click()
+            settle_controls(page, False, allow_playing=True)
+        host.scroll_into_view_if_needed()
+        page.wait_for_function(
+            "() => document.querySelector('.bridge-live-scene')?.dataset.playing === 'true'"
+        )
+        before = host.evaluate(
+            "h => ({x: Number(h.dataset.frontX), frames: Number(h.dataset.frames)})"
+        )
+        page.wait_for_timeout(900)
+        data = host.evaluate("""h => {
+            const state = h.bridgeAnimation, graph = h.querySelector('.bridge-live-plot');
+            return {front: Number(h.dataset.frontX), frames: Number(h.dataset.frames),
+                    error: h.dataset.error, vehicles: state.vehicles.map(v => ({
+                        offset: v.offset,
+                        front: graph.data[v.index].x[0] - v.template.x[0] + v.template.meta.front
+                    }))};
+        }""")
+        assert not data.get("error") and data["front"] > before["x"]
+        assert data["frames"] - before["frames"] >= 5
+        for vehicle in data["vehicles"]:
+            assert vehicle["front"] + vehicle["offset"] == pytest.approx(data["front"], abs=0.1)
+        if width < 768:
+            page.get_by_text("Controls", exact=True).click()
+            settle_controls(page, allow_playing=True)
+        page.get_by_role("button", name="Pause", exact=True).click()
+        page.get_by_role("button", name="Play", exact=True).wait_for()
+        page.wait_for_function("""() => {
+            const host = document.querySelector('.bridge-live-scene');
+            return host?.dataset.playing === 'false';
+        }""")
+        if width < 768:
+            page.get_by_role("button", name="Hide controls", exact=True).click()
+            settle_controls(page, False)
+        page.get_by_text("Save model / export results", exact=True).click()
+        with page.expect_download() as download:
+            page.get_by_role("button", name="Save Model JSON", exact=True).click()
+        model_path = tmp_path / f"traffic-{count}.json"
+        download.value.save_as(model_path)
+        model = json.loads(model_path.read_text())
+        assert model["schema_version"] == 2 and len(model["scenario"]["vehicles"]) == count
+        if width < 768:
+            page.get_by_test_id("stExpandSidebarButton").click()
+        page.get_by_text("Replace current project", exact=True).click()
+        page.get_by_test_id("stFileUploader").locator("input[type=file]").set_input_files(
+            model_path
+        )
+        page.get_by_role("button", name="Open uploaded model", exact=True).click()
+        page.get_by_text("Model and vehicle scenario loaded.", exact=True).wait_for()
+        if width < 768:
+            page.get_by_test_id("stSidebar").get_by_role(
+                "button", name="Collapse sidebar", exact=True
+            ).click()
+        page.get_by_role("button", name="Analyze", exact=True).click()
+        page.get_by_text(
+            "Analysis completed using the shared desktop solver.", exact=True
+        ).wait_for()
+        page.wait_for_function(
+            """count =>
+            Number(document.querySelector('.bridge-live-scene')?.dataset.vehicleCount) === count
+        """,
+            arg=count,
+        )
+        assert not errors and page.get_by_test_id("stException").count() == 0
+        page.screenshot(path=str(tmp_path / f"traffic-{count}-{width}.png"), full_page=True)
         browser.close()
 
 

@@ -17,20 +17,27 @@ import plotly.graph_objects as go
 import streamlit as st
 from matplotlib.figure import Figure
 
-from web import plots as _plots, workspace as _workspace
+import persistence as _persistence
+import traffic as _traffic
+from web import animation as _animation, plots as _plots, workspace as _workspace
 
 # Streamlit can retain modules imported before their files were watched.
-for _module in (_workspace, _plots):
+_refresh_dependencies = False
+for _module in (_traffic, _persistence, _workspace, _plots, _animation):
     _stamp = Path(_module.__file__).stat().st_mtime_ns
-    if getattr(_module, "_bridge_loaded_stamp", None) != _stamp:
+    if _module is _animation:
+        _stamp = (_stamp, Path(_module.__file__).with_name("animation.js").stat().st_mtime_ns)
+    if _refresh_dependencies or getattr(_module, "_bridge_loaded_stamp", None) != _stamp:
         importlib.reload(_module)
         _module._bridge_loaded_stamp = _stamp
+        _refresh_dependencies = True
 
 from redundancy_plots import draw_comparison
 from web.animation import animated_scene, load_animation_runtime
 from web.plots import CONFIG, base_layout, diagram, diagram_png, scene
 from web.responsive import phone_layout
 from web.workspace import KINDS, Workspace, csv_bytes, numbers
+from traffic import PRESETS, VEHICLE_FIELDS, preset_vehicle, traffic_scenario
 
 
 st.set_page_config(
@@ -281,9 +288,26 @@ def view_controls():
     return labels, deformed, color, scale / 100, camera, road, vehicle, loads
 
 
-def vehicle_controls(w):
-    with st.expander("Moving vehicle loads", expanded=True):
-        s = w.scenario
+def traffic_editor(w):
+    """Draft controls never alter numerical traffic until an explicit Apply."""
+    s = w.scenario
+    prefix = f"traffic_{w.revision}"
+    saved = [{key: v[key] for key in VEHICLE_FIELDS} for v in w.vehicles]
+    draft = st.session_state.setdefault(f"{prefix}_draft", [dict(v) for v in saved])
+    while len(draft) < 3:
+        draft.append(preset_vehicle("Car" if len(draft) == 1 else "Bus", 3))
+    count = st.selectbox(
+        "Number of vehicles", [1, 2, 3], index=len(saved) - 1, key=f"{prefix}_count"
+    )
+    first_kind = st.selectbox(
+        "Vehicle 1 type",
+        list(PRESETS),
+        index=list(PRESETS).index(draft[0]["kind"]),
+        key=f"{prefix}_kind_0",
+    )
+    draft[0]["kind"] = first_kind
+    if count == 1 and first_kind == "Truck" and not traffic_scenario(s):
+        # Keep the original single-truck form and its labels for existing workflows.
         with st.form(f"vehicle_form_{w.revision}"):
             enabled = st.checkbox("Enable moving loads", value=s["enabled"])
             front = st.number_input("Front axle (kN)", 0.0, 100000.0, float(s["front_N"] / 1000))
@@ -292,14 +316,106 @@ def vehicle_controls(w):
             step = st.number_input("Response step (m)", 0.05, 20.0, w.response_step, 0.05)
             if st.form_submit_button("Apply vehicle settings", width="stretch"):
 
-                def apply():
+                def apply_single():
                     w.configure(bool(enabled), front * 1000, rear * 1000, spacing, step)
                     w.analyze()
 
-                act(apply)
+                act(apply_single)
+        return
+    st.caption(
+        "Example presets, not regulatory design vehicles. Load a preset explicitly; "
+        "changing a type does not silently replace custom axle forces."
+    )
+    enabled = st.checkbox("Enable moving loads", value=s["enabled"], key=f"{prefix}_enabled")
+    vehicles = []
+    for i in range(count):
+        v = draft[i]
+        with st.expander(f"Vehicle {i + 1}", expanded=True):
+            kind = (
+                first_kind
+                if i == 0
+                else st.selectbox(
+                    f"Vehicle {i + 1} type",
+                    list(PRESETS),
+                    index=list(PRESETS).index(v["kind"]),
+                    key=f"{prefix}_kind_{i}",
+                )
+            )
+            v["kind"] = kind
+            if st.button(f"Load preset for vehicle {i + 1}", key=f"{prefix}_preset_{i}"):
+                replacement = preset_vehicle(kind, 0 if i == 0 else 3)
+                for field, divisor in (("front_N", 1000), ("rear_N", 1000), ("spacing_m", 1)):
+                    st.session_state[f"{prefix}_{field}_{i}"] = replacement[field] / divisor
+                v.update({key: replacement[key] for key in ("front_N", "rear_N", "spacing_m")})
+            front = st.number_input(
+                f"Vehicle {i + 1} front axle (kN)",
+                0.0,
+                100000.0,
+                float(v["front_N"] / 1000),
+                key=f"{prefix}_front_N_{i}",
+            )
+            rear = st.number_input(
+                f"Vehicle {i + 1} rear axle (kN)",
+                0.0,
+                100000.0,
+                float(v["rear_N"] / 1000),
+                key=f"{prefix}_rear_N_{i}",
+            )
+            spacing = st.number_input(
+                f"Vehicle {i + 1} wheelbase (m)",
+                0.0,
+                1000.0,
+                float(v["spacing_m"]),
+                key=f"{prefix}_spacing_m_{i}",
+            )
+            gap = 0.0
+            if i:
+                gap = st.number_input(
+                    f"Gap before vehicle {i + 1} (m)",
+                    2.0,
+                    1000.0,
+                    float(v["gap_m"]),
+                    key=f"{prefix}_gap_{i}",
+                    help="Previous vehicle's rear axle to this vehicle's front axle; not bumper clearance.",
+                )
+            vehicles.append(
+                {
+                    "kind": kind,
+                    "front_N": front * 1000,
+                    "rear_N": rear * 1000,
+                    "spacing_m": spacing,
+                    "gap_m": gap,
+                }
+            )
+            v.update(vehicles[-1])
+    step = st.number_input(
+        "Response step (m)", 0.05, 20.0, w.response_step, 0.05, key=f"{prefix}_step"
+    )
+    st.caption(
+        "Same lane, direction and playback clock. Wheelbases ≥ 1.2 m; rear-axle-to-next-"
+        "front-axle gaps ≥ 2 m. Static loads stay active once."
+    )
+    if vehicles != saved or enabled != s["enabled"] or step != w.response_step:
+        st.warning(
+            "Draft traffic is not applied. Plots and results still use the applied configuration."
+        )
+    if st.button("Apply traffic settings", type="primary", width="stretch"):
+
+        def apply_traffic():
+            w.configure_traffic(bool(enabled), vehicles, step)
+            w.analyze()
+
+        act(apply_traffic, message=f"Applied {count} simultaneous vehicle(s).")
+
+
+def vehicle_controls(w):
+    with st.expander("Moving vehicle loads", expanded=True):
+        s = w.scenario
+        st.caption(f"Applied traffic: {len(w.vehicles)} vehicle(s).")
+        traffic_editor(w)
         # A fresh key prevents stale slider state from overwriting playback or reset.
         fraction = st.slider(
-            "Front axle position (%)",
+            "Leading front axle position (%)" if len(w.vehicles) > 1 else "Front axle position (%)",
             0.0,
             100.0,
             float(s["position_fraction"] * 100),
@@ -310,7 +426,22 @@ def vehicle_controls(w):
         if abs(fraction / 100 - s["position_fraction"]) > 1e-8:
             act(w.set_position, fraction / 100)
         try:
-            st.caption(f"Solved front x = {w.position:.3f} m · playback {w.playback_time:.3f} s")
+            reference = "lead front" if len(w.vehicles) > 1 else "front"
+            st.caption(
+                f"Solved {reference} x = {w.position:.3f} m · playback {w.playback_time:.3f} s"
+            )
+            if len(w.vehicles) > 1:
+                st.caption("All reported front-x positions refer to the leading vehicle.")
+                table(
+                    [
+                        {
+                            "Vehicle": i + 1,
+                            "Type": v["kind"],
+                            "Front x (m)": w.position - v["front_offset_m"],
+                        }
+                        for i, v in enumerate(w.vehicles)
+                    ]
+                )
         except ValueError:
             st.caption("Select a valid deck path before applying a vehicle.")
         play, reset = st.columns(2)
@@ -330,7 +461,8 @@ def vehicle_controls(w):
                 "1. Create a stable truss and Analyze.\n"
                 "2. Select horizontal deck nodes.\n"
                 "3. Keep static loads, or clear them for vehicle-only response.\n"
-                "4. Apply downward axle forces and spacing, then enable moving loads.\n"
+                "4. Choose one to three vehicles; edit axle forces, wheelbases and gaps. "
+                "Enable moving loads and Apply vehicle/traffic settings.\n"
                 "5. Use the slider or Play/Pause/Reset.\n"
                 "6. Compute envelopes for full-passage extrema, independent of response step."
             )
@@ -751,6 +883,12 @@ def workspace_body(w):
         vehicle_controls(w)
         options = view_controls()
     with central:
+        if len(w.vehicles) > 1:
+            active = "enabled" if w.scenario["enabled"] else "disabled"
+            st.caption(
+                f"Applied profile: {len(w.vehicles)} vehicles; moving loads {active}. "
+                "Vehicle-study front-x columns refer to the leading vehicle."
+            )
         labels, deformed, color, scale, camera, road, vehicle, loads = options
         names = [
             "2D View",
@@ -786,8 +924,8 @@ def workspace_body(w):
                         fit,
                     )
                     st.caption(
-                        "Road, vehicle, duplicate side and cross ties add no stiffness or self-weight. "
-                        "Closely spaced or widely separated axles use a schematic truck."
+                        "Road, vehicles, duplicate side and cross ties add no stiffness or self-weight. "
+                        "Vehicle shapes are illustrative; front-x labels use the leading vehicle."
                     )
                 elif name == "Influence Lines":
                     influence_panel(w)

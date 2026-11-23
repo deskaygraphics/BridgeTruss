@@ -59,3 +59,10 @@ def animated_scene(fig, workspace, camera, fit):
         },
         height=490,
     )
+
+
+# Allow the running application to refresh the registered JS without losing models.
+_bridge_loaded_stamp = (
+    Path(__file__).stat().st_mtime_ns,
+    Path(__file__).with_name("animation.js").stat().st_mtime_ns,
+)

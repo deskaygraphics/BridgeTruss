@@ -220,14 +220,27 @@ def wheel(fig, x, lane, height, rotation):
     )
 
 
-def truck_mesh(front, spacing, top):
+def truck_mesh(front, spacing, top, kind="Truck", front_offset=0.0, vehicle_index=0):
     """One GPU mesh; wheel vertex ranges allow client-side rolling transforms."""
     parts = go.Figure()
-    rear = -min(spacing, 12) - 0.7
-    box(parts, (rear, 0.8, 0.9, 3.1, top + 0.55, top + 0.85), "#26333f")
-    box(parts, (-0.7, 0.9, 0.9, 3.1, top + 0.85, top + 2.5), "#c64632")
-    box(parts, (rear, -0.85, 0.95, 3.05, top + 0.9, top + 2.85), "#dce4e9")
-    box(parts, (0.91, 0.94, 1.1, 2.9, top + 1.7, top + 2.3), "#29485f")
+    radius = 0.32 if kind == "Car" else 0.42
+    if kind == "Car":
+        rear = -spacing - 0.6
+        box(parts, (rear, 0.9, 0.9, 3.1, top + 0.35, top + 1.0), "#347dc2")
+        box(parts, (-spacing + 0.2, -0.3, 1.02, 2.98, top + 1.0, top + 1.65), "#5699ce")
+        box(parts, (-0.29, -0.26, 1.07, 2.93, top + 1.1, top + 1.58), "#213b51")
+    elif kind == "Bus":
+        rear = -spacing - 0.8
+        box(parts, (rear, 0.9, 0.9, 3.1, top + 0.55, top + 2.75), "#d8a32d")
+        for y in (0.88, 3.1):
+            box(parts, (rear + 0.2, 0.65, y, y + 0.02, top + 1.5, top + 2.35), "#29485f")
+        box(parts, (0.905, 0.93, 1.1, 2.9, top + 1.4, top + 2.4), "#213b51")
+    else:
+        rear = -min(spacing, 12) - 0.7
+        box(parts, (rear, 0.8, 0.9, 3.1, top + 0.55, top + 0.85), "#26333f")
+        box(parts, (-0.7, 0.9, 0.9, 3.1, top + 0.85, top + 2.5), "#c64632")
+        box(parts, (rear, -0.85, 0.95, 3.05, top + 0.9, top + 2.85), "#dce4e9")
+        box(parts, (0.91, 0.94, 1.1, 2.9, top + 1.7, top + 2.3), "#29485f")
     vertices = {k: [] for k in ("x", "y", "z", "i", "j", "k", "vertexcolor")}
 
     def append(mesh):
@@ -254,13 +267,13 @@ def truck_mesh(front, spacing, top):
                 )
             append(
                 go.Mesh3d(
-                    x=[*(x + 0.42 * np.cos(angles)), *(x + 0.42 * np.cos(angles)), x, x],
+                    x=[*(x + radius * np.cos(angles)), *(x + radius * np.cos(angles)), x, x],
                     y=[*[lane - 0.12] * n, *[lane + 0.12] * n, lane - 0.12, lane + 0.12],
                     z=[
-                        *(top + 0.42 + 0.42 * np.sin(angles)),
-                        *(top + 0.42 + 0.42 * np.sin(angles)),
-                        top + 0.42,
-                        top + 0.42,
+                        *(top + radius + radius * np.sin(angles)),
+                        *(top + radius + radius * np.sin(angles)),
+                        top + radius,
+                        top + radius,
                     ],
                     i=[f[0] for f in faces],
                     j=[f[1] for f in faces],
@@ -271,17 +284,32 @@ def truck_mesh(front, spacing, top):
             spoke = go.Figure()
             box(
                 spoke,
-                (x - 0.3, x + 0.3, lane + 0.125, lane + 0.15, top + 0.385, top + 0.455),
+                (
+                    x - radius * 0.7,
+                    x + radius * 0.7,
+                    lane + 0.125,
+                    lane + 0.15,
+                    top + radius - 0.035,
+                    top + radius + 0.035,
+                ),
                 "#aab5bf",
             )
             append(spoke.data[0])
-            wheels.append({"start": start, "stop": len(vertices["x"]), "x": x, "z": top + 0.42})
+            wheels.append({"start": start, "stop": len(vertices["x"]), "x": x, "z": top + radius})
     vertices["x"] = [x + front for x in vertices["x"]]
     return go.Mesh3d(
         **vertices,
         flatshading=True,
         hoverinfo="skip",
-        meta={"role": "vehicle", "front": front, "wheels": wheels},
+        meta={
+            "role": "vehicle",
+            "front": front,
+            "wheels": wheels,
+            "kind": kind,
+            "front_offset_m": front_offset,
+            "vehicle_index": vehicle_index,
+            "wheel_radius": radius,
+        },
     )
 
 
@@ -367,9 +395,18 @@ def scene(
             for y in (0.35, 3.65):
                 box(fig, (xmin, xmax, y - 0.03, y + 0.03, top, top + 0.02), "#e9e8d9")
         if show_vehicle and workspace.scenario["enabled"]:
-            front = workspace.position
-            spacing = workspace.scenario["spacing_m"]
-            fig.add_trace(truck_mesh(front, spacing, top))
+            for i, vehicle in enumerate(workspace.vehicles):
+                offset = vehicle["front_offset_m"]
+                fig.add_trace(
+                    truck_mesh(
+                        workspace.position - offset,
+                        vehicle["spacing_m"],
+                        top,
+                        vehicle["kind"],
+                        offset,
+                        i,
+                    )
+                )
         if show_loads:
             loads = m.display_loads if m.display_loads is not None else m.loads
             length = max(xmax - xmin, 1) * 0.07
@@ -449,7 +486,8 @@ def scene(
         # Fixed bounds prevent rescaling/jitter as the truck crosses the bridge.
         min_x, max_x = xmin, xmax
         if workspace.scenario["enabled"] and show_vehicle:
-            min_x = workspace.position_at(0) - workspace.scenario["spacing_m"] - 1
+            last = workspace.vehicles[-1]
+            min_x = workspace.position_at(0) - last["front_offset_m"] - last["spacing_m"] - 1
             max_x = workspace.position_at(1) + 1.5
         scene_layout.update(
             {

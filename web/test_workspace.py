@@ -345,12 +345,12 @@ def test_controls_visibility_preserves_model_results_and_widget_settings():
     result = w.model.results["U"].copy()
     widget(a.checkbox, "Show node IDs").uncheck().run()
     widget(a.selectbox, "Color by").select("Stress").run()
-    widget(a.toggle, "Controls").uncheck().run()
+    widget(a.toggle, "Controls").set_value(False).run()
     assert not a.exception
     assert not a.session_state["controls_visible"]
     widget(a.button, "Analyze").click().run()
     assert not a.session_state["controls_visible"]
-    widget(a.toggle, "Controls").check().run()
+    widget(a.toggle, "Controls").set_value(True).run()
     assert not a.exception
     assert not widget(a.checkbox, "Show node IDs").value
     assert widget(a.selectbox, "Color by").value == "Stress"
@@ -358,6 +358,25 @@ def test_controls_visibility_preserves_model_results_and_widget_settings():
     widget(a.button, "Hide controls").click().run()
     assert not a.exception
     assert not a.session_state["controls_visible"]
+
+
+def test_traffic_editor_presets_apply_atomically():
+    a = app()
+    widget(a.selectbox, "Number of vehicles").select(3).run()
+    assert not a.exception and len(a.session_state["workspace"].vehicles) == 1
+    widget(a.selectbox, "Vehicle 2 type").select("Bus").run()
+    assert widget(a.number_input, "Vehicle 2 front axle (kN)").value == 8
+    widget(a.button, "Load preset for vehicle 2").click().run()
+    assert widget(a.number_input, "Vehicle 2 front axle (kN)").value == 50
+    widget(a.checkbox, "Enable moving loads").check()
+    widget(a.button, "Apply traffic settings").click().run()
+    assert not a.exception and len(a.session_state["workspace"].vehicles) == 3
+    assert a.session_state["workspace"].vehicles[1]["kind"] == "Bus"
+    widget(a.slider, "Leading front axle position (%)").set_value(50.0).run()
+    assert not a.exception and a.session_state["workspace"].model.results is not None
+    a.session_state["workspace_tab"] = "Interactive 3D"
+    a.run()
+    assert not a.exception
 
 
 def test_number_lists_are_finite():
