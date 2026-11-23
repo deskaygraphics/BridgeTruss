@@ -1,7 +1,7 @@
 """Fixed-spacing, same-direction traffic; axle forces remain quasi-static inputs."""
 
 from copy import deepcopy
-from math import isfinite
+from math import isfinite, isclose
 from numbers import Real
 
 
@@ -70,6 +70,30 @@ def validate_scenario(scenario):
             0 if i == 0 else 1000,
         )
     return deepcopy(scenario)
+
+
+def validate_control_precision(scenario):
+    """Reject settings that either UI would otherwise silently round."""
+    if not scenario:
+        return
+    groups = (
+        [(f"Vehicle {i + 1} ", vehicle) for i, vehicle in enumerate(scenario["vehicles"])]
+        if traffic_scenario(scenario)
+        else [("", scenario)]
+    )
+    for prefix, values in [("", {"position_fraction": scenario["position_fraction"]}), *groups]:
+        for key, divisor, decimals in [
+            ("front_N", 1000, 2),
+            ("rear_N", 1000, 2),
+            ("spacing_m", 1, 2),
+            ("gap_m", 1, 2),
+            ("position_fraction", 1, 3),
+        ]:
+            if key not in values:
+                continue
+            value = values[key] / divisor
+            if not isclose(value, round(value, decimals), rel_tol=1e-12, abs_tol=1e-12):
+                raise ValueError(f"{prefix}{key} exceeds control precision; adjust it explicitly")
 
 
 def positioned_vehicles(scenario):

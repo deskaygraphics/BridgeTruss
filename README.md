@@ -10,8 +10,8 @@ Two interfaces are available:
   and optional 3D visualization.
 - **Browser application:** a desktop-style Streamlit workspace with model editing,
   interactive 2D/3D views, moving loads, result tables, design/redundancy studies
-  and desktop-compatible single-truck model files. It also supports browser-only
-  traffic profiles with up to three simultaneous vehicles. The original guided
+  and desktop-compatible model files. Both interfaces support traffic profiles
+  with up to three simultaneous vehicles. The original guided
   demo is also available.
 
 Both interfaces use the same numerical analysis modules. The software is an
@@ -24,7 +24,7 @@ educational analysis tool, not a certified bridge-design application.
 - Calculate joint displacements, support reactions, axial forces and stresses.
 - Inspect magnified deformation, signed force diagrams and numerical diagnostics.
 - Define a horizontal deck path and a two-axle vehicle with adjustable forces and spacing.
-- In the full web workspace, combine one to three Car/Bus/Truck vehicles with
+- In the desktop and full web workspace, combine one to three Car/Bus/Truck vehicles with
   independently editable axle forces, wheelbases and following gaps.
 - Calculate influence lines and complete moving-load envelopes with governing axle positions.
 - Compare layouts at equal material volume and explore height/member-area combinations.
@@ -47,6 +47,7 @@ independently verified. The commands below use a Linux/macOS shell.
 ### Download the source
 
 The browser interface and its configuration are on the `BridgeTruss` branch:
+The `main` branch contains the older guided demo, not this full workspace.
 
 ```bash
 git clone --branch BridgeTruss https://github.com/deskaygraphics/BridgeTruss.git
@@ -132,11 +133,18 @@ not a public hosting URL.
 
 1. Use **Select Deck Nodes** to define the load-transfer path. Presets already
    select their bottom-chord deck joints.
-2. Enable moving loads and enter the front/rear axle forces and their spacing.
-3. Use the position slider or **Play** to inspect successive quasi-static states.
-4. Click **Compute Signed Envelopes** for minimum/maximum responses and the
+2. At the top of the right sidebar, set **Number of vehicles** (1–3). Added
+   followers default to Car and Bus, using the same presets as the full web workspace.
+3. Use **Edit individual vehicles…** to configure each type, axle forces,
+   wheelbase and rear-to-next-front axle gap. **Load preset** explicitly applies
+   that vehicle type's example forces/wheelbase. Changing a type alone preserves
+   custom loads. The main sidebar axle inputs edit vehicle 1 only.
+4. Enable moving loads, then use the leading-front position slider or **Play**
+   to inspect successive quasi-static states. Each vehicle contributes its own
+   two axle loads; static loads are counted once.
+5. Click **Compute Signed Envelopes** for minimum/maximum responses and the
    corresponding front-axle positions over the full crossing.
-5. Use **Influence Lines** for responses to a downward 1 N load; these exclude
+6. Use **Influence Lines** for responses to a downward 1 N load; these exclude
    existing static loads.
 
 Existing static loads remain active unless explicitly removed with **Clear Static
@@ -189,7 +197,7 @@ Example models in `examples/` include:
 - `pratt_vehicle.json`: planar bridge with a two-axle vehicle.
 - `redundant_bridge.json`: bridge with an additional diagonal; M18 can be studied.
 - `traffic_three_vehicles.json`: the redundant bridge with a Truck, Car and Bus
-  together (version 2; full web workspace only).
+  together (version 2; opens in the updated desktop and full web workspace).
 
 To generate reproducible redundancy results without opening the desktop interface:
 
@@ -369,10 +377,10 @@ No opposing traffic, overtaking, collisions, dynamics or extra self-weight is mo
 
 The original single Truck still saves **version 1** JSON and opens on desktop.
 Car/Bus and multiple-vehicle profiles save **version 2**, including all vehicle
-types, forces, wheelbases and gaps. Reopen those files in the full web workspace.
-The desktop rejects version-2 traffic profiles before replacing the active
-model, rather than silently loading only the first vehicle. Older app versions
-also reject the new schema. Returning to a single Truck and applying settings
+types, forces, wheelbases and gaps. Both updated interfaces can open these files,
+validate the same control precision, and calculate using the same complete axle list
+and leading-front positions. Older desktop versions reject version-2 profiles;
+update them before opening these files. Returning to a single Truck and applying settings
 restores version-1 saves.
 
 Result ZIPs include the complete versioned model plus traffic definitions and
@@ -402,6 +410,21 @@ BRIDGETRUSS_WEB_BROWSER=1 python -m pytest web/test_browser.py -q
 ```
 
 Set `BRIDGETRUSS_CHROME` if Chrome is installed outside `/usr/bin/google-chrome`.
+If another app is already using port 8501, run this checkout on another port,
+then point browser verification to that server:
+
+```bash
+python -m streamlit run web/app.py --server.port 8502
+```
+
+In another terminal using this checkout and environment:
+
+```bash
+BRIDGETRUSS_WEB_BROWSER=1 BRIDGETRUSS_WEB_URL=http://127.0.0.1:8502/ python -m pytest web/test_browser.py -q
+```
+
+Check that the page heading says **BridgeTruss | Planar Analysis** and the sidebar
+offers **Full workspace**, rather than testing an older guided-demo checkout.
 
 ## Troubleshooting
 

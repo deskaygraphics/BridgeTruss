@@ -68,6 +68,21 @@ from design import compare_trusses, parameter_study
 from redundancy_ui import RedundancyPanel
 from editing import member_edit, load_edit
 from scene3d import Scene3D
+from desktop_traffic import TrafficDialog
+from traffic import (
+    positioned_vehicles,
+    preset_vehicle,
+    scenario_axles,
+    traffic_scenario,
+    validate_scenario,
+    validate_control_precision,
+)
+
+
+def configure_graphics():
+    # Some parent shells disable both GLX and EGL even when the driver supports them.
+    if HAS_3D and os.environ.get("QT_XCB_GL_INTEGRATION") == "none":
+        os.environ.pop("QT_XCB_GL_INTEGRATION")
 
 
 class Plot(FigureCanvasQTAgg):
@@ -491,6 +506,7 @@ class Main(QMainWindow):
         self.influence = None
         self._comparison_key = None
         self.moving_enabled = False
+        self._traffic_vehicles = None
         self.play_timer = QTimer(self)
         self.play_timer.setTimerType(Qt.PreciseTimer)
         self.play_timer.timeout.connect(self.animate_vehicle)
@@ -662,6 +678,21 @@ class Main(QMainWindow):
         cv.addWidget(group)
         group = QGroupBox("Moving Vehicle Loads")
         mg = QVBoxLayout(group)
+        mg.addWidget(QLabel("Number of vehicles"))
+        self.vehicle_count = QSpinBox()
+        self.vehicle_count.setRange(1, 3)
+        self.vehicle_count.setValue(1)
+        self.vehicle_count.setToolTip(
+            "Use the same 1–3 vehicle traffic as the web. New followers default to Car and Bus."
+        )
+        self.vehicle_count.valueChanged.connect(self.change_vehicle_count)
+        mg.addWidget(self.vehicle_count)
+        self.traffic_button = QPushButton("Edit individual vehicles…")
+        self.traffic_button.clicked.connect(self.edit_traffic)
+        mg.addWidget(self.traffic_button)
+        self.traffic_summary = QLabel("Truck · settings below edit vehicle 1")
+        self.traffic_summary.setWordWrap(True)
+        mg.addWidget(self.traffic_summary)
         self.moving_help_button = QPushButton("Moving Load Setup Guide")
         self.moving_help_button.setToolTip(
             "Step-by-step help: deck nodes, axle forces, playback and response envelopes. "
@@ -710,9 +741,9 @@ class Main(QMainWindow):
             "This is not vehicle speed and does not control envelope accuracy."
         )
         for name, widget in [
-            ("Front axle", self.axle_front),
-            ("Rear axle", self.axle_rear),
-            ("Axle spacing", self.axle_spacing),
+            ("Vehicle 1 front axle", self.axle_front),
+            ("Vehicle 1 rear axle", self.axle_rear),
+            ("Vehicle 1 wheelbase", self.axle_spacing),
             ("Response step", self.vehicle_step),
         ]:
             mg.addWidget(QLabel(name))
@@ -725,7 +756,7 @@ class Main(QMainWindow):
             "Enable moving loads to update results; at the endpoints the vehicle is off the bridge."
         )
         self.vehicle_position.valueChanged.connect(self.moving_changed)
-        mg.addWidget(QLabel("Vehicle front axle position"))
+        mg.addWidget(QLabel("Leading front axle position"))
         mg.addWidget(self.vehicle_position)
         self.position_label = QLabel("0.00 m")
         self.position_label.setWordWrap(True)
@@ -751,7 +782,7 @@ class Main(QMainWindow):
         )
         reset.clicked.connect(self.reset_vehicle)
         buttons.addWidget(reset)
-        mg.addLayout(buttons)
+        mg.insertLayout(mg.indexOf(self.moving_toggle) + 1, buttons)
         self.envelope_button = QPushButton("Compute Signed Envelopes")
         self.envelope_button.setToolTip(
             "Find minimum/maximum member forces, stresses, displacement components and reactions "
@@ -764,7 +795,7 @@ class Main(QMainWindow):
         note = QLabel("Quasi-static; explicit deck nodes. Full entry-to-exit travel.")
         note.setWordWrap(True)
         mg.addWidget(note)
-        cv.addWidget(group)
+        cv.insertWidget(0, group)
         group = QGroupBox("Legend")
         gg = QVBoxLayout(group)
         gg.addWidget(QLabel("🔴  Positive = Tension"))
@@ -896,13 +927,17 @@ class Main(QMainWindow):
                 "loads remain active. For vehicle-only results, use <b>Clear Static Loads</b> "
                 "in the left sidebar and confirm the removal.</li>"
                 "<li><b>Define the vehicle.</b> In the right sidebar's <b>Moving Vehicle Loads</b> "
+                "choose <b>Number of vehicles</b> from 1–3. Use <b>Edit individual vehicles…</b> "
+                "for each vehicle's type, axle forces, wheelbase and following gap. "
+                "Presets match the web workspace; type alone does not change custom forces. "
+                "The sidebar axle controls edit vehicle 1 only. For a single truck, in this "
                 "section, try <b>80 kN front axle</b>, <b>120 kN rear axle</b> and "
                 "<b>4 m axle spacing</b>. Positive axle forces act <b>downward</b>. "
                 "The rear axle follows the front; a zero force disables that axle.</li>"
                 "<li><b>Enable and position.</b> Check <b>Enable moving loads</b>, then drag "
                 "the vehicle-position slider. It controls the front axle's x coordinate "
-                "from before entry through the rear axle's complete exit. At the start "
-                "and end both axles are outside the bridge, so only static loads remain. "
+                "from before entry through the last vehicle's rear axle's complete exit. At the start "
+                "and end all axles are outside the bridge, so only static loads remain. "
                 "Move the slider inward if you do not yet see a vehicle load.</li>"
                 "<li><b>Animate and inspect.</b> Set <b>Response step</b> to, for example, "
                 "<b>0.5 m/step</b>, then press <b>Play</b>. Pause stops playback; "
@@ -1052,7 +1087,7 @@ class Main(QMainWindow):
         valid = (
             (kind == "member" and 0 <= identity < len(self.model.members))
             or (kind in ("node", "load") and identity in self.model.nodes)
-            or (kind == "axle" and identity in (0, 1) and self.moving_enabled)
+            or (kind == "axle" and 0 <= identity < len(self.axles()) and self.moving_enabled)
         )
         if not valid:
             self.clear_selection_3d()
@@ -1087,8 +1122,10 @@ class Main(QMainWindow):
             fx, fy = self.model.loads.get(identity, (0.0, 0.0))
             text = f"Joint N{identity}: static Fx={fx / 1000:g}, Fy={fy / 1000:g} kN. Edit to add/change/reattach its static load; Remove removes only its load."
         else:
-            widget = self.axle_front if identity == 0 else self.axle_rear
-            text = f"{'Front' if identity == 0 else 'Rear'} vehicle axle: {widget.value():g} kN. Edit force/spacing; Remove sets force to zero."
+            index, axle = divmod(identity, 2)
+            vehicle = self.traffic_vehicles()[index]
+            force = vehicle["front_N" if axle == 0 else "rear_N"] / 1000
+            text = f"Vehicle {index + 1} ({vehicle['kind']}), {'front' if axle == 0 else 'rear'} axle: {force:g} kN. Edit affects only this vehicle; Remove sets only this axle force to zero."
         self.selection3d.setText(text)
         if self.scene3d is not None:
             self.scene3d.highlight(entity)
@@ -1117,23 +1154,7 @@ class Main(QMainWindow):
         self.stop_vehicle()
         self.model, state = self._undo_3d
         self.clear_playback_history()
-        controls = (
-            self.moving_toggle,
-            self.axle_front,
-            self.axle_rear,
-            self.axle_spacing,
-            self.vehicle_position,
-        )
-        for control in controls:
-            control.blockSignals(True)
-        self.moving_enabled = state["enabled"]
-        self.moving_toggle.setChecked(state["enabled"])
-        self.axle_front.setValue(state["front_N"] / 1000)
-        self.axle_rear.setValue(state["rear_N"] / 1000)
-        self.axle_spacing.setValue(state["spacing_m"])
-        self.vehicle_position.setValue(round(state["position_fraction"] * 1000))
-        for control in controls:
-            control.blockSignals(False)
+        self.restore_scenario(state)
         self.position_label.setText(f"{self.front_position():.2f} m")
         self.kind.blockSignals(True)
         self.kind.setCurrentText(
@@ -1236,14 +1257,27 @@ class Main(QMainWindow):
         )
 
     def edit_axle_3d(self, axle):
-        widget = self.axle_front if axle == 0 else self.axle_rear
+        index, which = divmod(axle, 2)
+        vehicle = self.traffic_vehicles()[index]
         force, ok = QInputDialog.getDouble(
-            self, "Vehicle axle", "Downward force (kN):", widget.value(), 0, 100000, 2
+            self,
+            f"Vehicle {index + 1} axle",
+            "Downward force (kN):",
+            vehicle["front_N" if which == 0 else "rear_N"] / 1000,
+            0,
+            100000,
+            2,
         )
         if not ok:
             return
         spacing, ok = QInputDialog.getDouble(
-            self, "Vehicle axle", "Axle spacing (m):", self.axle_spacing.value(), 0, 1000, 2
+            self,
+            "Vehicle axle",
+            "Axle spacing (m):",
+            vehicle["spacing_m"],
+            1.2 if self._traffic_vehicles is not None else 0,
+            1000,
+            2,
         )
         if ok:
             self.change_axle_3d(axle, force, spacing)
@@ -1253,6 +1287,17 @@ class Main(QMainWindow):
         self.stop_vehicle()
         state = self.scenario()
         previous = deepcopy(self.model)
+        if self._traffic_vehicles is not None:
+            index, which = divmod(axle, 2)
+            vehicles = deepcopy(self._traffic_vehicles)
+            vehicles[index]["front_N" if which == 0 else "rear_N"] = force * 1000
+            vehicles[index]["spacing_m"] = spacing
+            self.configure_traffic(vehicles)
+            if not self.moving_enabled:
+                self.analyze()
+            self._undo_3d = (previous, state)
+            self.undo3d.setEnabled(True)
+            return
         widget = self.axle_front if axle == 0 else self.axle_rear
         for control in (widget, self.axle_spacing):
             control.blockSignals(True)
@@ -1286,7 +1331,7 @@ class Main(QMainWindow):
         elif kind in ("node", "load"):
             self.apply_3d_edit(lambda: self.model.loads.pop(identity, None))
         else:
-            self.change_axle_3d(identity, 0.0, self.axle_spacing.value())
+            self.change_axle_3d(identity, 0.0, self.traffic_vehicles()[identity // 2]["spacing_m"])
 
     @staticmethod
     def fill_table(table, rows):
@@ -1618,6 +1663,12 @@ class Main(QMainWindow):
             QMessageBox.warning(self, "Design study", str(e))
 
     def scenario(self):
+        if self._traffic_vehicles is not None:
+            return {
+                "enabled": self.moving_enabled,
+                "position_fraction": self.vehicle_position.value() / 1000,
+                "vehicles": deepcopy(self._traffic_vehicles),
+            }
         return {
             "enabled": self.moving_enabled,
             "front_N": self.axle_front.value() * 1000,
@@ -1625,6 +1676,85 @@ class Main(QMainWindow):
             "spacing_m": self.axle_spacing.value(),
             "position_fraction": self.vehicle_position.value() / 1000,
         }
+
+    def traffic_vehicles(self):
+        return positioned_vehicles(self.scenario())
+
+    def restore_scenario(self, state):
+        """Restore controls atomically for project loads and undo; no calculations."""
+        vehicles = positioned_vehicles(state) if state else [preset_vehicle("Truck")]
+        self._traffic_vehicles = deepcopy(state["vehicles"]) if traffic_scenario(state) else None
+        controls = (
+            self.moving_toggle,
+            self.axle_front,
+            self.axle_rear,
+            self.axle_spacing,
+            self.vehicle_position,
+            self.vehicle_count,
+        )
+        for widget in controls:
+            widget.blockSignals(True)
+        try:
+            first = vehicles[0]
+            self.moving_enabled = state.get("enabled", False)
+            self.moving_toggle.setChecked(self.moving_enabled)
+            self.vehicle_count.setValue(len(vehicles))
+            self.axle_spacing.setMinimum(1.2 if self._traffic_vehicles is not None else 0)
+            self.axle_front.setValue(first["front_N"] / 1000)
+            self.axle_rear.setValue(first["rear_N"] / 1000)
+            self.axle_spacing.setValue(first["spacing_m"])
+            self.vehicle_position.setValue(round(state.get("position_fraction", 0) * 1000))
+        finally:
+            for widget in controls:
+                widget.blockSignals(False)
+        self.update_traffic_summary()
+
+    def update_traffic_summary(self):
+        vehicles = self.traffic_vehicles()
+        self.traffic_summary.setText(
+            " → ".join(vehicle["kind"] for vehicle in vehicles)
+            + "\nSeparate axle loads; settings below edit vehicle 1."
+        )
+
+    def configure_traffic(self, vehicles):
+        state = {
+            "enabled": self.moving_enabled,
+            "position_fraction": self.vehicle_position.value() / 1000,
+            "vehicles": deepcopy(vehicles),
+        }
+        if len(vehicles) == 1 and vehicles[0]["kind"] == "Truck":
+            state = {
+                "enabled": self.moving_enabled,
+                "position_fraction": state["position_fraction"],
+                **{key: vehicles[0][key] for key in ("front_N", "rear_N", "spacing_m")},
+            }
+        validate_scenario(state)
+        validate_control_precision(state)
+        self.stop_vehicle(sync=False)
+        self.restore_scenario(state)
+        self.moving_changed()
+        if not self.moving_enabled:
+            self.refresh()
+
+    def change_vehicle_count(self, count):
+        vehicles = [
+            {key: value for key, value in vehicle.items() if key != "front_offset_m"}
+            for vehicle in self.traffic_vehicles()
+        ]
+        while len(vehicles) < count:
+            vehicles.append(preset_vehicle("Car" if len(vehicles) == 1 else "Bus", 3))
+        try:
+            self.configure_traffic(vehicles[:count])
+        except ValueError as exc:
+            self.vehicle_count.blockSignals(True)
+            self.vehicle_count.setValue(len(self.traffic_vehicles()))
+            self.vehicle_count.blockSignals(False)
+            QMessageBox.warning(self, "Invalid traffic", str(exc))
+
+    def edit_traffic(self):
+        dialog = TrafficDialog(self.traffic_vehicles(), self)
+        if dialog.exec() == QDialog.Accepted:
+            self.configure_traffic(dialog.vehicles)
 
     def save_project(self):
         self.stop_vehicle()
@@ -1642,43 +1772,21 @@ class Main(QMainWindow):
     def open_project(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open model", "", "JSON (*.json)")
         if not path:
-            return
+            return False
+        return self.load_project(path)
+
+    def load_project(self, path):
         try:
             model, state = load_model(path)
-            if "vehicles" in state:
-                raise ValueError(
-                    "Traffic-profile projects require the web workspace. The desktop supports "
-                    "the original single truck only. The current model has not been replaced."
-                )
-            if state:
-                controls = (
-                    ("front_N", self.axle_front, 1000),
-                    ("rear_N", self.axle_rear, 1000),
-                    ("spacing_m", self.axle_spacing, 1),
-                )
-                for key, widget, scale in controls:
-                    value = state[key] / scale
-                    if not np.isclose(
-                        value, round(value, widget.decimals()), rtol=1e-12, atol=1e-12
-                    ):
-                        raise ValueError(
-                            f"{key} exceeds dashboard precision; adjust the JSON explicitly "
-                            "before opening. The current model has not been replaced."
-                        )
-                fraction = state["position_fraction"]
-                if not np.isclose(fraction, round(fraction * 1000) / 1000, rtol=1e-12, atol=1e-12):
-                    raise ValueError(
-                        "position_fraction must use increments of 0.001 for the dashboard. "
-                        "The current model has not been replaced."
-                    )
+            validate_control_precision(state)
         except Exception as e:
             QMessageBox.warning(self, "Open model", str(e))
-            return
+            return False
         if (
             QMessageBox.question(
                 self,
                 "Replace model",
-                "Replace the current model with this file?",
+                "Replace the current model with this file? Unsaved changes will be lost.",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
@@ -1689,27 +1797,13 @@ class Main(QMainWindow):
         self.model = model
         self.clear_playback_history()
         self._camera_initialized = False
-        widgets = [
-            self.kind,
-            self.moving_toggle,
-            self.axle_front,
-            self.axle_rear,
-            self.axle_spacing,
-            self.vehicle_position,
-        ]
-        for widget in widgets:
-            widget.blockSignals(True)
+        self.kind.blockSignals(True)
         self.kind.setCurrentText("Custom Truss")
-        self.moving_enabled = state.get("enabled", False)
-        self.moving_toggle.setChecked(self.moving_enabled)
-        self.axle_front.setValue(state.get("front_N", 80000) / 1000)
-        self.axle_rear.setValue(state.get("rear_N", 120000) / 1000)
-        self.axle_spacing.setValue(state.get("spacing_m", 4))
-        self.vehicle_position.setValue(round(state.get("position_fraction", 0) * 1000))
-        for widget in widgets:
-            widget.blockSignals(False)
+        self.kind.blockSignals(False)
+        self.restore_scenario(state)
         self.position_label.setText(f"{self.front_position():.2f} m")
         self.analyze()
+        return True
 
     def export_bundle(self):
         self.stop_vehicle()
@@ -1868,7 +1962,7 @@ class Main(QMainWindow):
         except ValueError:
             xmin, xmax = self.bridge_limits()
             top = min(v[1] for v in self.model.nodes.values()) + 0.18
-        return (
+        visual = (
             front,
             front - self.axle_spacing.value(),
             self.axle_front.value(),
@@ -1877,6 +1971,9 @@ class Main(QMainWindow):
             xmax,
             top,
         )
+        if self._traffic_vehicles is not None:
+            visual += (self.traffic_vehicles(),)
+        return visual
 
     def render_scene(self):
         if self.scene3d is None:
@@ -1991,15 +2088,14 @@ class Main(QMainWindow):
         return (min(xs), max(xs)) if xs else (0.0, 1.0)
 
     def axles(self):
-        return [
-            (0.0, self.axle_front.value() * 1000),
-            (self.axle_spacing.value(), self.axle_rear.value() * 1000),
-        ]
+        return scenario_axles(self.scenario())
 
     def front_at_fraction(self, fraction):
         try:
             xmin, xmax = travel_limits(self.model, self.axles())
             epsilon = max(xmax - xmin, 1.0) * 1e-8
+            if self._traffic_vehicles is not None:
+                epsilon = max(epsilon, 1.0)
             xmin -= epsilon
             xmax += epsilon
         except ValueError:
@@ -2013,6 +2109,13 @@ class Main(QMainWindow):
         return vehicle_loads(self.model, self.front_position(), self.axles())
 
     def moving_changed(self, *args):
+        if self._traffic_vehicles is not None:
+            self._traffic_vehicles[0].update(
+                front_N=self.axle_front.value() * 1000,
+                rear_N=self.axle_rear.value() * 1000,
+                spacing_m=self.axle_spacing.value(),
+            )
+        self.update_traffic_summary()
         if not self._in_animation:
             self.stop_vehicle(sync=False)
             self._visual_fraction = None
@@ -2063,6 +2166,8 @@ class Main(QMainWindow):
     def animate_vehicle(self):
         try:
             lo, hi = travel_limits(self.model, self.axles())
+            if self._traffic_vehicles is not None:
+                lo, hi = self.front_at_fraction(0), self.front_at_fraction(1)
         except ValueError:
             self.stop_vehicle(sync=False)
             return
@@ -2113,6 +2218,8 @@ class Main(QMainWindow):
     def advance_vehicle(self):
         try:
             xmin, xmax = travel_limits(self.model, self.axles())
+            if self._traffic_vehicles is not None:
+                xmin, xmax = self.front_at_fraction(0), self.front_at_fraction(1)
         except ValueError:
             self.stop_vehicle()
             return
@@ -2350,6 +2457,7 @@ class Main(QMainWindow):
 
 
 if __name__ == "__main__":
+    configure_graphics()
     app = QApplication(sys.argv)
     w = Main()
     w.show()
