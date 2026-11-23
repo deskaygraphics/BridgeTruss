@@ -25,7 +25,7 @@ repos:
       - id: end-of-file-fixer
 
   - repo: https://github.com/codespell-project/codespell
-    rev: v2.4.1
+    rev: v2.4.3
     hooks:
       - id: codespell
         # "bu" is the displacement-envelope bound index in redundancy.py.
@@ -33,6 +33,6 @@ repos:
         exclude: '\.(csv|geojson|json|pdf)$'
 
   - repo: https://github.com/kynan/nbstripout
-    rev: 0.8.1
+    rev: 0.9.2
     hooks:
       - id: nbstripout
