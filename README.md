@@ -1,4 +1,5 @@
 # BridgeTruss
+![BridgeTruss application logo](assets/bridgetruss.png)
 
 BridgeTruss is a Python application for matrix analysis of planar bridge trusses
 under static and quasi-static moving loads. It combines an editable desktop
@@ -16,6 +17,18 @@ Two interfaces are available:
 
 Both interfaces use the same numerical analysis modules. The software is an
 educational analysis tool, not a certified bridge-design application.
+
+## Quick start
+
+- **Use online:** open [BridgeTruss in your browser](https://bridgetrus.streamlit.app/).
+  No installation is required.
+- **Install on Ubuntu:** use the `.deb` installer described below, then launch
+  **BridgeTruss** from the applications menu. No Python setup is required.
+- **Run from source:** follow the desktop or browser environment instructions below.
+
+The installed desktop application runs local analysis offline. The hosted browser
+application requires an internet connection. Save or download model JSON to move
+projects between the two interfaces.
 
 ## Features
 
@@ -43,17 +56,55 @@ interactive 3D still requires compatible graphics drivers.
 From the directory containing a built installer:
 
 ```bash
+sha256sum -c bridgetruss_0.1.0_amd64.deb.sha256
 sudo apt install ./bridgetruss_0.1.0_amd64.deb
 ```
 
-Launch **BridgeTruss** from the applications menu or run `bridgetruss`.
-If graphics initialization fails, try `bridgetruss --no-3d`.
-`bridgetruss --smoke-test` checks the installation without opening a window.
+The installer and checksum are generated locally in `dist/`; they are not
+committed to Git. Cloning the repository does not download a prebuilt installer.
+If you do not already have the `.deb`, build it using the instructions below
+or obtain it and its checksum from the person distributing the application.
+The initial installer is approximately 258 MiB and needs about 1.2 GiB installed,
+excluding any additional native dependencies.
+
+Launch **BridgeTruss** from the applications menu or run:
+
+```bash
+bridgetruss
+```
+
+Useful installation checks and fallback options:
+
+```bash
+bridgetruss --version
+bridgetruss --smoke-test
+bridgetruss --no-3d
+```
+
+The smoke test checks the application icon, default numerical result, project
+save/load, bundled examples and 3D-library imports without opening a window;
+it does not validate interactive OpenGL rendering. The `--no-3d` option starts
+the desktop interface without initializing the 3D renderer.
+
+The application is installed under `/opt/bridgetruss`, with a command in
+`/usr/bin/bridgetruss`. Bundled example JSON files are available in
+`/opt/bridgetruss/_internal/examples/`. Save your own projects to a writable
+location such as your Documents folder, not the installation directory.
 To uninstall, run `sudo apt remove bridgetruss`; user-saved projects are not
 part of the package and are not removed.
 
+### Build the Ubuntu installer
+
+Use the source branch containing `packaging/` and `scripts/build_deb.py`
+(currently `local/web-vehicle-review`).
 To build the installer on Ubuntu 24.04 amd64, use a dedicated Python 3.12
-environment and install the desktop and build dependencies:
+environment. Install the native build tools first:
+
+```bash
+sudo apt install python3.12-venv dpkg desktop-file-utils
+```
+
+From the repository root:
 
 ```bash
 python3.12 -m venv .venv-package
@@ -64,17 +115,22 @@ python scripts/build_deb.py
 
 The native build tools `dpkg-deb` and `desktop-file-validate` must be installed
 (Ubuntu packages `dpkg` and `desktop-file-utils`). Output is written to `dist/`:
-the standalone application directory, `.deb` installer and SHA-256 checksum.
+- `bridgetruss/`: standalone application directory; keep its contents together.
+- `bridgetruss_0.1.0_amd64.deb`: installable Debian package.
+- `bridgetruss_0.1.0_amd64.deb.sha256`: checksum for the installer.
+
+Allow several GiB of free disk space for the environment and build artifacts.
 Version information is maintained in `app_version.py`. Build outputs are ignored
 by Git. This build has not been validated on other Linux distributions or CPU
 architectures. Dependency versions in the build environment affect the artifact;
 this is a repeatable build procedure, not a guarantee of byte-identical output.
 
-### Requirements
+### Source requirements
 
 - Git, if downloading the source by cloning the repository.
-- Python 3.10 or newer for the desktop source; Python 3.13 is the tested version
-  for both interfaces and is recommended for the pinned browser dependencies.
+- Python 3.10 or newer for the desktop source; Python 3.12 was used to build
+  and validate the Ubuntu installer. Python 3.13 is recommended for the pinned
+  browser dependencies; the hosted app has also been verified on Python 3.14.
 - An internet connection to install Python dependencies.
 - A desktop display for the Qt interface and a working OpenGL graphics stack for 3D.
 
@@ -83,8 +139,10 @@ independently verified. The commands below use a Linux/macOS shell.
 
 ### Download the source
 
-The browser interface and its configuration are on the `BridgeTruss` branch:
-The `main` branch contains the older guided demo, not this full workspace.
+The deployed full browser workspace uses the `BridgeTruss` branch. Installer
+packaging and icon updates are being prepared on `local/web-vehicle-review`.
+The `main` branch is an older snapshot and does not contain the current full
+workspace.
 
 ```bash
 git clone --branch BridgeTruss https://github.com/deskaygraphics/BridgeTruss.git
@@ -320,7 +378,8 @@ These fast checks do not replace the test suite or analytical benchmarks.
 
 ## Browser usage
 
-After starting Streamlit using the installation instructions above:
+Open [the hosted app](https://bridgetrus.streamlit.app/), or start Streamlit
+locally using the installation instructions above:
 
 1. **Full workspace** starts with an analyzed Pratt truss. Use **New Project**
    for an empty model, or the sidebar's **New / presets / open** section to
@@ -470,7 +529,18 @@ offers **Full workspace**, rather than testing an older guided-demo checkout.
 - **Qt xcb cursor error on Ubuntu:** check that the system package
   `libxcb-cursor0` is installed.
 - **OpenGL or 3D initialization failure:** try `BRIDGETRUSS_NO_3D=1 python main.py`
-  or use the browser interface for the supplied numerical examples.
+  from source, or `bridgetruss --no-3d` for the installed application.
+- **Installer architecture or dependency error:** the initial `.deb` targets
+  Ubuntu 24.04 amd64, not ARM, Windows, macOS or older Ubuntu versions. Install
+  it with `sudo apt install ./bridgetruss_0.1.0_amd64.deb` so APT can resolve
+  native dependencies.
+- **Installed application does not start:** run `bridgetruss` from a terminal
+  to see diagnostics, then try `bridgetruss --smoke-test` and `bridgetruss --no-3d`.
+- **Streamlit import error after a code update:** inspect the full deployment
+  logs for the missing symbol and check the configured branch and entry point
+  (`BridgeTruss`, `web/app.py` for the hosted workspace). Rebooting the app clears
+  stale Python modules. The startup code refreshes watched dependencies before
+  importing their consumers.
 - **Unstable or ill-conditioned model:** review supports, connectivity and member
   properties. The solver does not add artificial stiffness to conceal instability.
 - **Invalid deck path:** select at least two distinct existing joints at a common
