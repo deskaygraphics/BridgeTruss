@@ -55,6 +55,31 @@ def validate_axles(axles):
     return values
 
 
+def convoy_axles(front_force, rear_force, spacing, count=1, gap=4.0):
+    """Identical two-axle vehicles; gap is rear-to-next-front axle distance."""
+    if type(count) is not int or not 1 <= count <= 3:
+        raise ValueError("Vehicle count must be an integer from 1 to 3")
+    values = np.asarray([front_force, rear_force, spacing, gap], float)
+    if not np.all(np.isfinite(values)) or np.any(values < 0):
+        raise ValueError("Axle forces, spacing and vehicle gap must be finite and nonnegative")
+    return [
+        (index * (spacing + gap) + offset, force)
+        for index in range(count)
+        for offset, force in ((0.0, front_force), (spacing, rear_force))
+    ]
+
+
+def scenario_axles(scenario):
+    """Read legacy single-vehicle and optional multi-vehicle scenarios."""
+    return convoy_axles(
+        scenario["front_N"],
+        scenario["rear_N"],
+        scenario["spacing_m"],
+        scenario.get("vehicle_count", 1),
+        scenario.get("vehicle_gap_m", 4.0),
+    )
+
+
 def vehicle_loads(model, position, axles):
     ids, xs = deck_path(model)
     axles = validate_axles(axles)

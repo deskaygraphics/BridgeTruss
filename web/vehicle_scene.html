@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px system-ui, sans-serif; color: #e9f1fb; background: #142334; }
+  .scene { border: 1px solid #496279; border-radius: 10px; overflow: hidden; }
+  .toolbar, .metrics, .position { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 14px; }
+  .toolbar { background: #20354a; }
+  button, select { font: inherit; padding: 7px 12px; border-radius: 6px; border: 1px solid #69849c; color: #f4f8ff; background: #314e68; cursor: pointer; }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid #ffd36c; }
+  #play { background: #176bb0; min-width: 74px; }
+  label { display: flex; align-items: center; gap: 6px; }
+  canvas { display: block; width: 100%; height: 320px; touch-action: none; cursor: grab; background: #b7d1e8; }
+  canvas:active { cursor: grabbing; }
+  .position input { flex: 1; min-width: 100px; accent-color: #72b7f3; }
+  .metrics { background: #1c3044; justify-content: space-between; font-variant-numeric: tabular-nums; }
+  .metrics strong { color: #ffd77a; }
+  .note { margin: 0; padding: 8px 14px; font-size: 12px; color: #bdcedd; }
+  @media (max-width: 540px) { canvas { height: 280px; } .toolbar { gap: 8px; } }
+</style>
+</head>
+<body>
+<main class="scene" aria-label="Baseline moving vehicle animation">
+  <div class="toolbar">
+    <button id="play" type="button" aria-label="Play animation">Play</button>
+    <button id="reset" type="button">Reset</button>
+    <label>Speed
+      <select id="speed" aria-label="Playback speed">
+        <option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
+      </select>
+    </label>
+    <label>View
+      <select id="view" aria-label="Camera view"><option value="iso">Isometric</option><option value="side">Side</option></select>
+    </label>
+    <label><input type="checkbox" id="deformed">Deformation ×50</label>
+  </div>
+  <canvas id="bridge" role="img" aria-label="Truck, passenger car and bus moving on the baseline bridge"></canvas>
+  <div class="position">
+    <label for="position">Leading axle position</label>
+    <input id="position" type="range" min="0" max="1000" step="1" value="0">
+    <output id="position-value" for="position">0.00 m</output>
+  </div>
+  <div class="metrics">
+    <span>Vehicles: <strong id="types"></strong></span>
+    <span>Active convoy load: <strong id="active-load">0.0 kN</strong></span>
+    <span>Baseline peak |uy|: <strong id="deflection">0.000 mm</strong></span>
+  </div>
+  <p class="note">Unmodified baseline, including static loads. Quasi-static playback—not physical time or a dynamic simulation.
+    Drag to orbit. Vehicle shapes do not assign weights. Study envelope results below are separate from this animation.</p>
+</main>
+<script id="model-data" type="application/json">__ANIMATION_DATA__</script>
+<script>
+"use strict";
+const data = JSON.parse(document.getElementById("model-data").textContent);
+const canvas = document.getElementById("bridge");
+const ctx = canvas.getContext("2d");
+const play = document.getElementById("play");
+const position = document.getElementById("position");
+const nodes = new Map(data.nodes.map(([id, x, y], index) => [id, {x, y, index}]));
+const xmin = data.deck[0][1], xmax = data.deck[data.deck.length - 1][1];
+const state = {fraction: 0, playing: false, last: null, yaw: -0.32, pitch: 0.38};
+let width = 1, height = 320, polygons = [], labels = [];
+document.getElementById("types").textContent = data.types.join(" → ");
+canvas.setAttribute("aria-label", data.types.join(", ") + " on the unmodified baseline bridge");
+canvas.dataset.vehicleCount = String(data.types.length);
+
+// This is the same deck-node interpolation and linear superposition as MovingResponse.at.
+// No interpolated response frames or extra copy of the stiffness solver are needed.
+function responseAt(front) {
+  const weights = data.deck.map(() => 0);
+  let load = 0;
+  for (const [offset, force] of data.axles) {
+    const x = front - offset;
+    if (x < xmin || x > xmax) continue;
+    let i = 0;
+    while (i < data.deck.length - 2 && x >= data.deck[i + 1][1]) i++;
+    const t = (x - data.deck[i][1]) / (data.deck[i + 1][1] - data.deck[i][1]);
+    weights[i] += force * (1 - t);
+    weights[i + 1] += force * t;
+    load += force;
+  }
+  const u = data.static_u.map((value, dof) =>
+    value + weights.reduce((sum, weight, index) => sum + weight * data.deck_unit_u[index][dof], 0));
+  const peak = Math.max(...u.filter((_, index) => index % 2 === 1).map(Math.abs));
+  return {u, load, peak};
+}
+
+function raw([x, y, z]) {
+  x -= (xmin + xmax) / 2;
+  y -= data.deck_y + 1.2;
+  z -= 2;
+  const rx = Math.cos(state.yaw) * x + Math.sin(state.yaw) * z;
+  const depth = -Math.sin(state.yaw) * x + Math.cos(state.yaw) * z;
+  return [rx, Math.cos(state.pitch) * y - Math.sin(state.pitch) * depth,
+    Math.sin(state.pitch) * y + Math.cos(state.pitch) * depth];
+}
+
+let scale = 1, centerX = 0, centerY = 0;
+function project(point) {
+  const [x, y, depth] = raw(point);
+  return [centerX + x * scale, centerY - y * scale, depth];
+}
+function fit() {
+  const approach = Math.max(4, Math.min(9, data.spacing + 1));
+  const corners = [];
+  const high = Math.max(...data.nodes.map(node => node[2]), data.deck_y + 4.5);
+  for (const x of [xmin - approach, xmax + approach])
+    for (const y of [data.deck_y - 2.2, high])
+      for (const z of [-0.4, 4.4]) corners.push(raw([x, y, z]));
+  const xs = corners.map(p => p[0]), ys = corners.map(p => p[1]);
+  const left = Math.min(...xs), right = Math.max(...xs);
+  const low = Math.min(...ys), top = Math.max(...ys);
+  scale = Math.min((width - 28) / (right - left), (height - 24) / (top - low));
+  centerX = width / 2 - (left + right) * scale / 2;
+  centerY = height / 2 + (low + top) * scale / 2;
+}
+function shape(points, color, stroke = null, lineWidth = 1) {
+  const projected = points.map(project);
+  polygons.push({points: projected, color, stroke, lineWidth,
+    depth: projected.reduce((sum, p) => sum + p[2], 0) / projected.length});
+}
+function line(a, b, color, lineWidth = 2) { shape([a, b], null, color, lineWidth); }
+function box([a, b, c, d, e, f], color) {
+  shape([[a,c,e], [b,c,e], [b,d,e], [a,d,e]], color, "#00000018");
+  shape([[a,c,f], [b,c,f], [b,d,f], [a,d,f]], color, "#00000018");
+  shape([[a,d,e], [b,d,e], [b,d,f], [a,d,f]], color, "#ffffff44");
+  shape([[b,c,e], [b,c,f], [b,d,f], [b,d,e]], color, "#00000030");
+  shape([[a,c,e], [a,c,f], [a,d,f], [a,d,e]], color, "#00000030");
+}
+function wheel(x, top, z, radius) {
+  const ring = [];
+  for (let i = 0; i < 18; i++) {
+    const angle = i * Math.PI / 9;
+    ring.push([x + Math.cos(angle) * radius, top + radius + Math.sin(angle) * radius, z]);
+  }
+  shape(ring, "#222d36", "#111a22", 1);
+  const spin = -(x - xmin) / radius;
+  line([x - Math.cos(spin) * radius * 0.6, top + radius - Math.sin(spin) * radius * 0.6, z],
+       [x + Math.cos(spin) * radius * 0.6, top + radius + Math.sin(spin) * radius * 0.6, z],
+       "#b7c6d3", 2);
+}
+function vehicle(kind, front) {
+  const top = data.deck_y + 0.18, rear = front - data.spacing;
+  const back = front - Math.min(data.spacing, 12);
+  let radius = 0.42, sides = [0.82, 3.18], roof = 2.95;
+  const body = (bounds, color) => box([
+    bounds[0] + front, bounds[1] + front, bounds[2] + top, bounds[3] + top, bounds[4], bounds[5]], color);
+  if (kind === "truck") {
+    const cargo = Math.min(-Math.min(data.spacing, 12) - 0.8, -1.35);
+    body([cargo, 0.95, 0.6, 0.88, 0.9, 3.1], "#374859");
+    body([cargo, -0.85, 1.02, 2.85, 0.95, 3.05], "#e4ebef");
+    body([-0.7, 0.9, 0.87, 2.5, 0.95, 3.05], "#d54b36");
+    body([0.91, 0.94, 1.72, 2.32, 1.08, 2.92], "#244458");
+    for (const z of [0.94, 3.06]) body([-0.57, 0.72, 1.68, 2.32, z - 0.01, z + 0.01], "#244458");
+  } else if (kind === "passenger car") {
+    radius = 0.30; sides = [1.05, 2.95]; roof = 1.55;
+    const cabin = Math.min(-Math.min(data.spacing, 12) + 0.2, -1.25);
+    body([Math.min(-Math.min(data.spacing, 12) - 0.75, cabin - 0.35), 0.88, 0.38, 0.92, 1.12, 2.88], "#348dd8");
+    for (const z of [1.17, 2.83]) {
+      shape([[front + cabin, top + 0.92, z], [front + cabin + 0.45, top + 1.48, z],
+             [front - 0.62, top + 1.48, z], [front + 0.02, top + 0.92, z]], "#173e58", "#277ac1");
+    }
+    body([cabin + 0.45, -0.62, 1.48, 1.55, 1.17, 2.83], "#236ba8");
+  } else {
+    radius = 0.46; sides = [0.78, 3.22]; roof = 2.98;
+    const rearBody = -Math.min(data.spacing, 12) - 1.35;
+    body([rearBody, 1.45, 0.56, 2.8, 0.86, 3.14], "#edbc35");
+    body([rearBody - 0.04, 1.49, 2.8, 2.94, 0.82, 3.18], "#f5e5a1");
+    body([1.46, 1.49, 1.22, 2.61, 1.0, 3.0], "#234857");
+    for (const z of [0.845, 3.155]) {
+      for (let i = 0; i < 5; i++) {
+        const start = rearBody + 0.22 + (1.18 - rearBody - 0.22) * i / 5;
+        const end = rearBody + 0.22 + (1.18 - rearBody - 0.22) * (i + 1) / 5;
+        body([start + 0.06, end - 0.06, 1.42, 2.59, z - 0.01, z + 0.01], "#234857");
+      }
+    }
+  }
+  for (const x of [front, rear]) for (const z of sides) wheel(x, top, z, radius);
+  labels.push({point: [(front + back) / 2, top + roof + 0.22, 2], text: kind});
+}
+function draw() {
+  if (!ctx) return;
+  fit();
+  polygons = []; labels = [];
+  const front = data.limits[0] + state.fraction * (data.limits[1] - data.limits[0]);
+  const result = responseAt(front);
+  const top = data.deck_y + 0.18;
+  const approach = Math.max(4, Math.min(9, data.spacing + 1));
+  box([xmin - approach, xmax + approach, data.deck_y - 2.1, data.deck_y - 2, -2, 6], "#8ca28a");
+  box([xmin - approach, xmax + approach, top - 0.18, top, 0.15, 3.85], "#4c5963");
+  for (const z of [0.4, 3.6]) line([xmin - approach, top + 0.02, z], [xmax + approach, top + 0.02, z], "#f8f3c8", 2);
+  for (const id of data.supports) {
+    const node = nodes.get(id);
+    if (Math.abs(node.y - data.deck_y) < 1e-8)
+      box([node.x - 0.5, node.x + 0.5, data.deck_y - 2, data.deck_y - 0.05, -0.2, 4.2], "#b5b2a3");
+  }
+  data.types.forEach((kind, index) => vehicle(kind, front - index * (data.spacing + data.gap)));
+  for (const z of [0, 4]) {
+    for (const [a, b] of data.members) {
+      const p = nodes.get(a), q = nodes.get(b);
+      line([p.x, p.y, z], [q.x, q.y, z], "#507d9e", 3);
+      if (document.getElementById("deformed").checked) {
+        line([p.x + 50 * result.u[2 * p.index], p.y + 50 * result.u[2 * p.index + 1], z],
+             [q.x + 50 * result.u[2 * q.index], q.y + 50 * result.u[2 * q.index + 1], z], "#cb4340", 2);
+      }
+    }
+  }
+  for (const [id] of data.deck) {
+    const node = nodes.get(id);
+    line([node.x, node.y, 0], [node.x, node.y, 4], "#a9bdc7", 2);
+  }
+  for (const [offset, force] of data.axles) {
+    const x = front - offset;
+    if (x < xmin || x > xmax || force === 0) continue;
+    line([x, top + 3.8, 3.55], [x, top + 0.12, 3.55], "#e54e39", 2.5);
+    shape([[x, top + 0.12, 3.55], [x - 0.18, top + 0.5, 3.55], [x + 0.18, top + 0.5, 3.55]], "#e54e39");
+  }
+  ctx.clearRect(0, 0, width, height);
+  polygons.sort((a, b) => a.depth - b.depth);
+  for (const item of polygons) {
+    ctx.beginPath();
+    item.points.forEach(([x, y], index) => index ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+    if (item.points.length > 2) ctx.closePath();
+    if (item.color) { ctx.fillStyle = item.color; ctx.fill(); }
+    if (item.stroke) { ctx.strokeStyle = item.stroke; ctx.lineWidth = item.lineWidth; ctx.stroke(); }
+  }
+  ctx.font = "600 12px system-ui";
+  ctx.textAlign = "center";
+  for (const label of labels) {
+    const [x, y] = project(label.point);
+    ctx.fillStyle = "#15354e"; ctx.fillText(label.text, x, y);
+  }
+  position.value = String(Math.round(state.fraction * 1000));
+  document.getElementById("position-value").textContent = front.toFixed(2) + " m";
+  document.getElementById("active-load").textContent = (result.load / 1000).toFixed(1) + " kN";
+  document.getElementById("deflection").textContent = (result.peak * 1000).toFixed(3) + " mm";
+  canvas.dataset.frontPosition = String(front);
+}
+function setPlaying(value) {
+  state.playing = value;
+  state.last = null;
+  play.textContent = value ? "Pause" : "Play";
+  play.setAttribute("aria-label", value ? "Pause animation" : "Play animation");
+}
+play.addEventListener("click", () => {
+  if (state.fraction >= 1) state.fraction = 0;
+  setPlaying(!state.playing); draw();
+});
+document.getElementById("reset").addEventListener("click", () => {
+  setPlaying(false); state.fraction = 0; draw();
+});
+position.addEventListener("input", () => {
+  setPlaying(false); state.fraction = Number(position.value) / 1000; draw();
+});
+document.getElementById("deformed").addEventListener("change", draw);
+document.getElementById("view").addEventListener("change", event => {
+  state.yaw = event.target.value === "side" ? 0 : -0.32;
+  state.pitch = event.target.value === "side" ? 0 : 0.38; draw();
+});
+let pointer = null;
+canvas.addEventListener("pointerdown", event => {
+  pointer = [event.clientX, event.clientY]; canvas.setPointerCapture(event.pointerId);
+});
+canvas.addEventListener("pointermove", event => {
+  if (!pointer) return;
+  state.yaw += (event.clientX - pointer[0]) * 0.006;
+  state.pitch = Math.max(-0.7, Math.min(1.1, state.pitch + (event.clientY - pointer[1]) * 0.006));
+  pointer = [event.clientX, event.clientY]; draw();
+});
+canvas.addEventListener("pointerup", () => { pointer = null; });
+canvas.addEventListener("pointercancel", () => { pointer = null; });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) setPlaying(false);
+});
+new ResizeObserver(() => {
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  width = Math.max(canvas.clientWidth, 1); height = canvas.clientHeight;
+  canvas.width = Math.round(width * ratio); canvas.height = Math.round(height * ratio);
+  if (ctx) ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  draw();
+}).observe(canvas);
+function tick(now) {
+  if (state.playing) {
+    const delta = state.last === null ? 0 : Math.min((now - state.last) / 1000, 0.1);
+    state.fraction = Math.min(1, state.fraction + delta / 20 * Number(document.getElementById("speed").value));
+    state.last = now;
+    if (state.fraction >= 1) setPlaying(false);
+    draw();
+  }
+  requestAnimationFrame(tick);
+}
+draw();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

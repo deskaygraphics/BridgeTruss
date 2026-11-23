@@ -139,13 +139,14 @@ independently verified. The commands below use a Linux/macOS shell.
 
 ### Download the source
 
-The deployed full browser workspace uses the `BridgeTruss` branch. Installer
-packaging and icon updates are being prepared on `local/web-vehicle-review`.
-The `main` branch is an older snapshot and does not contain the current full
-workspace.
+The deployed full browser workspace tracks the `BridgeTruss` branch independently
+of the default `main` branch. This update combines the full workspace, installer,
+icons, analytical verification and guided demo on `local/web-vehicle-review`
+for review into `main`. Until that merge is complete, use the review branch
+for the combined source; the deployment branch alone does not contain the installer.
 
 ```bash
-git clone --branch BridgeTruss https://github.com/deskaygraphics/BridgeTruss.git
+git clone --branch local/web-vehicle-review https://github.com/deskaygraphics/BridgeTruss.git
 cd BridgeTruss
 ```
 
@@ -482,8 +483,17 @@ restores version-1 saves.
 Result ZIPs include the complete versioned model plus traffic definitions and
 flattened axle offsets/forces in `analysis.json`; studies retain their position
 reference. The redundancy CLI also reads version-2 files and uses every axle.
-Guided demo remains the original single-truck audience example, with unchanged
-verified results.
+The guided demo also offers one-to-three-vehicle convoys and a self-contained
+baseline animation. Unlike the full workspace, its vehicles share the same
+configured axle forces and wheelbase; their truck/car/bus shapes are illustrative.
+The single-truck default retains its verified results.
+
+Older version-1 convoy files with `vehicle_count` and `vehicle_gap_m` retain
+their numerical axle definitions. The updated desktop and full web workspace
+convert compatible convoys into independently editable profiles; subsequent
+multi-vehicle saves use version 2. Files outside the current profile limits
+(for example, a follower gap below 2 m or excessive control precision) are
+rejected before replacing the active model, rather than silently adjusted.
 
 ### Browser tests
 

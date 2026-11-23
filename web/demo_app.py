@@ -14,9 +14,18 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import streamlit as st
+import streamlit.components.v1 as components
 from matplotlib.figure import Figure
 from redundancy_plots import draw_comparison
 from web.demo import PRESETS, run_example, verification_rows
+from web.demo_animation import animation_payload, animation_html
+
+
+st.set_page_config(
+    page_title="BridgeTruss | CE 7405",
+    page_icon=str(ROOT / "assets" / "bridgetruss.png"),
+    layout="wide",
+)
 
 
 @st.cache_data(max_entries=128, show_spinner=False)
@@ -27,6 +36,11 @@ def calculate(*inputs):
 @st.cache_data(show_spinner=False)
 def verify():
     return verification_rows()
+
+
+@st.cache_data(max_entries=32, show_spinner=False)
+def moving_scene(*inputs):
+    return animation_html(animation_payload(*inputs))
 
 
 @st.cache_resource
@@ -83,14 +97,60 @@ def main():
         st.caption(
             "Existing static loads remain active. The triangle uses its static hand-check load."
         )
-    with st.expander("Vehicle inputs (optional)"):
+    vehicles, gap_control = st.columns(2)
+    with vehicles:
+        count = st.selectbox(
+            "Number of vehicles",
+            [1, 2, 3],
+            format_func=lambda value: {
+                1: "1 — Truck",
+                2: "2 — Truck + passenger car",
+                3: "3 — Truck + passenger car + bus",
+            }[value],
+            disabled=triangle or not moving,
+            key="vehicle_count",
+        )
+    with gap_control:
+        gap = st.number_input(
+            "Gap between vehicles (m)",
+            0.0,
+            1000.0,
+            4.0,
+            0.5,
+            disabled=triangle or not moving or count == 1,
+            help="Rear axle of one vehicle to front axle of the next.",
+            key="vehicle_gap",
+        )
+    st.caption(
+        "Convoy order: truck → passenger car → bus. Vehicle types are illustrative; "
+        "each uses the same configured axle forces and spacing. Small gaps can overlap body overhangs."
+    )
+    with st.expander("Axle forces and spacing (per vehicle)"):
         cols = st.columns(3)
         front = cols[0].number_input("Front axle (kN)", 0.0, 500.0, 80.0, 10.0, disabled=triangle)
         rear = cols[1].number_input("Rear axle (kN)", 0.0, 500.0, 120.0, 10.0, disabled=triangle)
         spacing = cols[2].number_input("Axle spacing (m)", 0.0, 15.0, 4.0, 1.0, disabled=triangle)
-    inputs = (preset, percent, bool(moving), front, rear, spacing)
+    inputs = (preset, percent, bool(moving), front, rear, spacing, int(count), gap)
     if st.session_state.get("calculated_inputs") != inputs:
         st.session_state.pop("study", None)
+    if moving and not triangle:
+        with st.expander("Animated moving vehicles — baseline", expanded=True):
+            components.html(
+                moving_scene(preset, front, rear, spacing, int(count), gap),
+                height=600,
+                scrolling=True,
+            )
+            st.caption(
+                "The animation shows the unmodified baseline, not the selected removal candidate. "
+                "Play/Pause and the position slider update its current quasi-static response. "
+                "Run example calculates the separate complete-passage study below."
+            )
+    else:
+        st.info(
+            "Moving-vehicle animation is disabled for static loading."
+            if not triangle
+            else "The analytical triangle uses its prescribed static load; no moving vehicles are applied."
+        )
     if st.button("Run example", type="primary"):
         try:
             with st.spinner("Solving the baseline and area-factor cases…"):

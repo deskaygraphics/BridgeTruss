@@ -4,6 +4,7 @@ import numpy as np
 from moving_loads import deck_path
 from visual_geometry import make_road
 from vehicle_geometry import make_vehicle
+from traffic import positioned_vehicles
 
 
 def actor_key(actor):
@@ -81,6 +82,18 @@ class Scene3D:
         if vehicle is None:
             return []
         if len(vehicle) > 7:
+            if isinstance(vehicle[7], int):
+                return positioned_vehicles(
+                    {
+                        "enabled": True,
+                        "position_fraction": 0.0,
+                        "front_N": vehicle[2] * 1000,
+                        "rear_N": vehicle[3] * 1000,
+                        "spacing_m": vehicle[0] - vehicle[1],
+                        "vehicle_count": vehicle[7],
+                        "vehicle_gap_m": vehicle[8],
+                    }
+                )
             return vehicle[7]
         return [
             {

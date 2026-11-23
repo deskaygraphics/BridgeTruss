@@ -3,13 +3,15 @@ import csv
 import math
 import json
 import os
+import signal
 import time
+import logging
 from copy import deepcopy
 from pathlib import Path
 from datetime import datetime
 import numpy as np
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QOffscreenSurface, QOpenGLContext
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -44,6 +46,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.patches import Polygon, Circle
 
+THREE_D_UNAVAILABLE = ""
 try:
     if os.environ.get("BRIDGETRUSS_NO_3D") == "1":
         raise ImportError("Illustrative 3D disabled by BRIDGETRUSS_NO_3D")
@@ -51,8 +54,9 @@ try:
     from pyvistaqt import QtInteractor
 
     HAS_3D = True
-except Exception:
+except Exception as exc:
     HAS_3D = False
+    THREE_D_UNAVAILABLE = str(exc)
 
 from bridge_model import Model, Member
 from moving_loads import (
@@ -77,6 +81,7 @@ from traffic import (
     traffic_scenario,
     validate_scenario,
     validate_control_precision,
+    profile_from_legacy,
 )
 
 
@@ -84,9 +89,29 @@ APP_ICON = Path(__file__).resolve().parent / "assets" / "bridgetruss.png"
 
 
 def configure_graphics():
-    # Some parent shells disable both GLX and EGL even when the driver supports them.
+    """Allow Qt to select GLX/EGL when the parent shell has disabled both."""
     if HAS_3D and os.environ.get("QT_XCB_GL_INTEGRATION") == "none":
         os.environ.pop("QT_XCB_GL_INTEGRATION")
+
+
+def check_opengl():
+    """Check Qt's backend before creating VTK widgets that require OpenGL."""
+    if QApplication.platformName() in ("offscreen", "minimal"):
+        raise RuntimeError("The current Qt display platform does not support interactive 3D")
+    context = QOpenGLContext()
+    if not context.create():
+        raise RuntimeError("Qt could not create an OpenGL context; check the display and driver")
+    surface = QOffscreenSurface()
+    surface.setFormat(context.format())
+    surface.create()
+    try:
+        if not surface.isValid() or not context.makeCurrent(surface):
+            raise RuntimeError("Qt could not activate an OpenGL rendering surface")
+        if context.format().version() < (3, 2):
+            raise RuntimeError("The 3D renderer requires OpenGL 3.2 or newer")
+    finally:
+        context.doneCurrent()
+        surface.destroy()
 
 
 class Plot(FigureCanvasQTAgg):
@@ -623,15 +648,17 @@ class Main(QMainWindow):
         self.panel3d = QWidget()
         layout3d = QVBoxLayout(self.panel3d)
         self.build_3d_controls(layout3d)
+        self.view3 = None
         if HAS_3D:
-            self.view3 = QtInteractor(self.panel3d)
-            layout3d.addWidget(self.view3)
-            self.scene3d = Scene3D(self.view3, pv, self.queue_3d_selection)
+            try:
+                check_opengl()
+                self.view3 = QtInteractor(self.panel3d)
+                layout3d.addWidget(self.view3)
+                self.scene3d = Scene3D(self.view3, pv, self.queue_3d_selection)
+            except Exception as exc:
+                self.disable_3d(str(exc))
         else:
-            self.view3 = QLabel("Install pyvista and pyvistaqt to enable the 3D view")
-            self.view3.setAlignment(Qt.AlignCenter)
-            layout3d.addWidget(self.view3)
-            self.attach3d.setEnabled(False)
+            self.disable_3d(THREE_D_UNAVAILABLE)
         self.tabs.addTab(self.panel3d, "Interactive 3D (planar model)")
         self.forceplot = Plot((8, 4), interactive=True)
         self.tabs.addTab(self.forceplot, "Axial Forces")
@@ -890,6 +917,10 @@ class Main(QMainWindow):
         self.tabs.currentChanged.connect(self.on_view_tab_changed)
         self.analyze()
 
+    def show_analytical_verification(self):
+        self.tabs.setCurrentWidget(self.redundancy_panel)
+        self.redundancy_panel.detail.setCurrentWidget(self.redundancy_panel.verification_panel)
+
     def on_view_tab_changed(self, *args):
         self.refresh()
         if self.tabs.currentWidget() is self.panel3d and not self._3d_presented:
@@ -1044,9 +1075,42 @@ class Main(QMainWindow):
         self.vehicle_note3d.setWordWrap(True)
         layout.addWidget(self.vehicle_note3d)
 
-    def fit_3d_view(self):
+    def disable_3d(self, reason):
+        self.scene3d = None
+        layout = self.panel3d.layout()
+        if self.view3 is not None:
+            layout.removeWidget(self.view3)
+            self.view3.hide()
+            try:
+                self.view3.close()
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "Could not close the 3D renderer", exc_info=True
+                )
+            self.view3.deleteLater()
+        self.view3 = QLabel(
+            f"3D view unavailable: {reason}\n\n"
+            "The 2D plots and structural analysis remain available.\n"
+            "Check your OpenGL driver and restart to retry 3D."
+        )
+        self.view3.setTextFormat(Qt.PlainText)
+        self.view3.setWordWrap(True)
+        self.view3.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.view3)
+        for widget in self.panel3d.findChildren(QWidget):
+            if isinstance(widget, (QPushButton, QCheckBox, QComboBox)):
+                widget.setEnabled(False)
+        logging.getLogger(__name__).warning("3D view unavailable: %s", reason)
+
+    def call_scene3d(self, method, *args, **kwargs):
         if self.scene3d is not None:
-            self.scene3d.fit()
+            try:
+                return getattr(self.scene3d, method)(*args, **kwargs)
+            except Exception as exc:
+                self.disable_3d(str(exc))
+
+    def fit_3d_view(self):
+        self.call_scene3d("fit")
 
     def queue_3d_selection(self, entity):
         # Finish VTK's picking callback before rebuilding geometry after an attach.
@@ -1073,7 +1137,7 @@ class Main(QMainWindow):
             self.edit3d.setEnabled(False)
             self.remove3d.setEnabled(False)
         if self.scene3d is not None:
-            self.scene3d.highlight(render=not self._in_animation)
+            self.call_scene3d("highlight", render=not self._in_animation)
 
     def toggle_attach_3d(self, enabled):
         self.stop_vehicle()
@@ -1108,7 +1172,7 @@ class Main(QMainWindow):
                 self.attach_anchor = identity
                 self.selection3d.setText(f"First joint N{identity}; right-click the second joint.")
                 if self.scene3d is not None:
-                    self.scene3d.highlight(anchor=("node", identity))
+                    self.call_scene3d("highlight", anchor=("node", identity))
                 return
             a = self.attach_anchor
             self.apply_3d_edit(
@@ -1133,7 +1197,7 @@ class Main(QMainWindow):
             text = f"Vehicle {index + 1} ({vehicle['kind']}), {'front' if axle == 0 else 'rear'} axle: {force:g} kN. Edit affects only this vehicle; Remove sets only this axle force to zero."
         self.selection3d.setText(text)
         if self.scene3d is not None:
-            self.scene3d.highlight(entity)
+            self.call_scene3d("highlight", entity)
 
     def apply_3d_edit(self, operation):
         previous = deepcopy(self.model)
@@ -1784,6 +1848,8 @@ class Main(QMainWindow):
         try:
             model, state = load_model(path)
             validate_control_precision(state)
+            state = profile_from_legacy(state)
+            validate_control_precision(state)
         except Exception as e:
             QMessageBox.warning(self, "Open model", str(e))
             return False
@@ -1797,7 +1863,7 @@ class Main(QMainWindow):
             )
             != QMessageBox.Yes
         ):
-            return
+            return False
         self.stop_vehicle()
         self.model = model
         self.clear_playback_history()
@@ -1983,7 +2049,8 @@ class Main(QMainWindow):
     def render_scene(self):
         if self.scene3d is None:
             return
-        self.scene3d.render(
+        self.call_scene3d(
+            "render",
             self.model,
             deformed=self.deformed.isChecked(),
             color_by=self.color.currentText(),
@@ -1994,6 +2061,8 @@ class Main(QMainWindow):
             show_loads=self.show_loads3d.isChecked(),
             camera_mode=self.camera3d.currentText(),
         )
+        if self.scene3d is None:
+            return
         note = (
             self.scene3d.vehicle_note
             or "Illustrative reference roadway; no added stiffness or self-weight."
@@ -2203,8 +2272,10 @@ class Main(QMainWindow):
             return
         self.update_playback_labels()
         if self.scene3d is not None and not did_solve:
-            self.scene3d.update_vehicle(
-                self.vehicle_visual(), render=self.tabs.currentWidget() is self.panel3d
+            self.call_scene3d(
+                "update_vehicle",
+                self.vehicle_visual(),
+                render=self.tabs.currentWidget() is self.panel3d,
             )
         visual = self.front_at_fraction(self._visual_fraction)
         self.position_label.setText(f"{visual:.2f} m (tables: {self.front_position():.2f} m)")
@@ -2437,8 +2508,13 @@ class Main(QMainWindow):
     def closeEvent(self, event):
         self.stop_vehicle(sync=False)
         if self.scene3d is not None:
-            self.view3.close()
             self.scene3d = None
+            try:
+                self.view3.close()
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "Could not close the 3D renderer", exc_info=True
+                )
         super().closeEvent(event)
 
     def export_csv(self):
@@ -2461,10 +2537,23 @@ class Main(QMainWindow):
         self.statusBar().showMessage("Saved " + path)
 
 
-if __name__ == "__main__":
+def main():
     configure_graphics()
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(str(APP_ICON)))
-    w = Main()
-    w.show()
-    sys.exit(app.exec())
+    previous_sigint = signal.signal(signal.SIGINT, lambda *_: app.closeAllWindows())
+    # Let Python process terminal signals even when Qt has no pending events.
+    signal_timer = QTimer(app)
+    signal_timer.timeout.connect(lambda: None)
+    signal_timer.start(100)
+    try:
+        window = Main()
+        window.show()
+        return app.exec()
+    finally:
+        signal_timer.stop()
+        signal.signal(signal.SIGINT, previous_sigint)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

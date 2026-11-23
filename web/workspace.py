@@ -31,6 +31,7 @@ from traffic import (
     traffic_scenario,
     validate_scenario,
     validate_control_precision,
+    profile_from_legacy,
 )
 
 
@@ -151,7 +152,7 @@ class Workspace:
         self.invalidate()
 
     def replace(self, model, scenario=None):
-        scenario = validate_scenario(scenario if scenario is not None else {})
+        scenario = profile_from_legacy(scenario if scenario is not None else {})
         self.validate_geometry(model)
         self.model = deepcopy(model)
         self.scenario = (

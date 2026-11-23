@@ -11,6 +11,7 @@ PRESETS = {
     "Bus": {"front_N": 50000.0, "rear_N": 90000.0, "spacing_m": 6.0},
 }
 LEGACY_FIELDS = {"enabled", "front_N", "rear_N", "spacing_m", "position_fraction"}
+LEGACY_CONVOY_FIELDS = {"vehicle_count", "vehicle_gap_m"}
 TRAFFIC_FIELDS = {"enabled", "position_fraction", "vehicles"}
 VEHICLE_FIELDS = {"kind", "front_N", "rear_N", "spacing_m", "gap_m"}
 
@@ -42,7 +43,8 @@ def validate_scenario(scenario):
     if not scenario:
         return {}
     fields = TRAFFIC_FIELDS if traffic_scenario(scenario) else LEGACY_FIELDS
-    if set(scenario) != fields:
+    allowed = fields if traffic_scenario(scenario) else fields | LEGACY_CONVOY_FIELDS
+    if not fields <= set(scenario) or set(scenario) - allowed:
         raise ValueError("Invalid vehicle scenario fields")
     if type(scenario["enabled"]) is not bool:
         raise ValueError("Moving-load enabled state must be boolean")
@@ -51,6 +53,10 @@ def validate_scenario(scenario):
         bounded(scenario["front_N"], "Front axle force (N)", 0, 1e8)
         bounded(scenario["rear_N"], "Rear axle force (N)", 0, 1e8)
         bounded(scenario["spacing_m"], "Axle spacing (m)", 0, 1000)
+        count = scenario.get("vehicle_count", 1)
+        if type(count) is not int or not 1 <= count <= 3:
+            raise ValueError("Vehicle count must be an integer from 1 to 3")
+        bounded(scenario.get("vehicle_gap_m", 4.0), "Vehicle gap (m)", 0, 1000)
         return deepcopy(scenario)
     vehicles = scenario["vehicles"]
     if not isinstance(vehicles, list) or not 1 <= len(vehicles) <= 3:
@@ -87,6 +93,7 @@ def validate_control_precision(scenario):
             ("rear_N", 1000, 2),
             ("spacing_m", 1, 2),
             ("gap_m", 1, 2),
+            ("vehicle_gap_m", 1, 2),
             ("position_fraction", 1, 3),
         ]:
             if key not in values:
@@ -106,12 +113,13 @@ def positioned_vehicles(scenario):
         if traffic_scenario(scenario)
         else [
             {
-                "kind": "Truck",
+                "kind": ("Truck", "Car", "Bus")[index],
                 "front_N": scenario["front_N"],
                 "rear_N": scenario["rear_N"],
                 "spacing_m": scenario["spacing_m"],
-                "gap_m": 0.0,
+                "gap_m": 0.0 if index == 0 else scenario.get("vehicle_gap_m", 4.0),
             }
+            for index in range(scenario.get("vehicle_count", 1))
         ]
     )
     output = []
@@ -121,6 +129,25 @@ def positioned_vehicles(scenario):
             offset += vehicles[i - 1]["spacing_m"] + vehicle["gap_m"]
         output.append({**deepcopy(vehicle), "front_offset_m": float(offset)})
     return output
+
+
+def profile_from_legacy(scenario):
+    """Map older identical-axle convoys to editable profiles without rounding."""
+    validate_scenario(scenario)
+    if not scenario or traffic_scenario(scenario) or not LEGACY_CONVOY_FIELDS & set(scenario):
+        return deepcopy(scenario)
+    if scenario.get("vehicle_count", 1) == 1:
+        return {key: deepcopy(scenario[key]) for key in LEGACY_FIELDS}
+    profile = {
+        "enabled": scenario["enabled"],
+        "position_fraction": scenario["position_fraction"],
+        "vehicles": [
+            {key: value for key, value in vehicle.items() if key != "front_offset_m"}
+            for vehicle in positioned_vehicles(scenario)
+        ],
+    }
+    # Older gaps/wheelbases outside current UI limits must not be silently clamped.
+    return validate_scenario(profile)
 
 
 def scenario_axles(scenario):
