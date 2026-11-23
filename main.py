@@ -9,6 +9,7 @@ from pathlib import Path
 from datetime import datetime
 import numpy as np
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -77,6 +78,9 @@ from traffic import (
     validate_scenario,
     validate_control_precision,
 )
+
+
+APP_ICON = Path(__file__).resolve().parent / "assets" / "bridgetruss.png"
 
 
 def configure_graphics():
@@ -528,6 +532,7 @@ class Main(QMainWindow):
         self.attach_anchor = None
         self._undo_3d = None
         self.setWindowTitle("BridgeTruss — Verified Planar Analysis")
+        self.setWindowIcon(QIcon(str(APP_ICON)))
         self.resize(1550, 940)
         self.setStyleSheet(
             """QMainWindow,QWidget{background:#19232e;color:#edf2f8;font-size:12px} QGroupBox{border:1px solid #3b4d61;border-radius:5px;margin-top:15px;padding:9px;font-weight:bold} QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 4px} QPushButton,QComboBox,QDoubleSpinBox,QSpinBox{background:#2b3b4d;color:#f5f8fc;border:1px solid #4a6076;border-radius:4px;padding:6px} QPushButton:hover{background:#365b83} QPushButton#primary{background:#2476e5} QTabWidget::pane{border:1px solid #3b4d61} QTabBar::tab{background:#283849;color:#fff;padding:8px 15px} QTabBar::tab:selected{background:#2263b5} QTableWidget{background:#f7f9fc;color:#172638;gridline-color:#cad4df} QHeaderView::section{background:#dce5ed;color:#172638;padding:5px} QCheckBox{padding:4px}"""
@@ -2459,6 +2464,7 @@ class Main(QMainWindow):
 if __name__ == "__main__":
     configure_graphics()
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(str(APP_ICON)))
     w = Main()
     w.show()
     sys.exit(app.exec())

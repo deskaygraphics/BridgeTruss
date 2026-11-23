@@ -31,6 +31,19 @@ def window(app, monkeypatch):
     app.processEvents()
 
 
+def test_window_icon_loads_outside_project_directory(app, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    instance = Main()
+    try:
+        assert not instance.windowIcon().isNull()
+        pixmap = instance.windowIcon().pixmap(64, 64)
+        assert not pixmap.isNull()
+        assert pixmap.width() == pixmap.height() == 64
+    finally:
+        instance.close()
+        app.processEvents()
+
+
 def test_traffic_project_requires_confirmation_then_loads_on_desktop(window, monkeypatch, tmp_path):
     from traffic import preset_vehicle
 

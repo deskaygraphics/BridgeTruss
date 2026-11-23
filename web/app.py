@@ -40,7 +40,10 @@ from traffic import PRESETS, VEHICLE_FIELDS, preset_vehicle, traffic_scenario
 
 
 st.set_page_config(
-    page_title="BridgeTruss | Planar Analysis", layout="wide", initial_sidebar_state="auto"
+    page_title="BridgeTruss | Planar Analysis",
+    page_icon=str(ROOT / "assets" / "bridgetruss.png"),
+    layout="wide",
+    initial_sidebar_state="auto",
 )
 
 STYLE = """
