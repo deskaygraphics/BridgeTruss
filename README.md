@@ -33,6 +33,43 @@ educational analysis tool, not a certified bridge-design application.
 
 ## Installation
 
+### Ubuntu desktop installer
+
+The standalone Debian package targets **Ubuntu 24.04 amd64**. It bundles Python,
+the desktop libraries, example models and the application icon. Users do not
+need a Python environment. Native graphics libraries are installed by APT;
+interactive 3D still requires compatible graphics drivers.
+
+From the directory containing a built installer:
+
+```bash
+sudo apt install ./bridgetruss_0.1.0_amd64.deb
+```
+
+Launch **BridgeTruss** from the applications menu or run `bridgetruss`.
+If graphics initialization fails, try `bridgetruss --no-3d`.
+`bridgetruss --smoke-test` checks the installation without opening a window.
+To uninstall, run `sudo apt remove bridgetruss`; user-saved projects are not
+part of the package and are not removed.
+
+To build the installer on Ubuntu 24.04 amd64, use a dedicated Python 3.12
+environment and install the desktop and build dependencies:
+
+```bash
+python3.12 -m venv .venv-package
+source .venv-package/bin/activate
+python -m pip install -r requirements.txt -r packaging/requirements-build.txt
+python scripts/build_deb.py
+```
+
+The native build tools `dpkg-deb` and `desktop-file-validate` must be installed
+(Ubuntu packages `dpkg` and `desktop-file-utils`). Output is written to `dist/`:
+the standalone application directory, `.deb` installer and SHA-256 checksum.
+Version information is maintained in `app_version.py`. Build outputs are ignored
+by Git. This build has not been validated on other Linux distributions or CPU
+architectures. Dependency versions in the build environment affect the artifact;
+this is a repeatable build procedure, not a guarantee of byte-identical output.
+
 ### Requirements
 
 - Git, if downloading the source by cloning the repository.
