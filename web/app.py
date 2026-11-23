@@ -17,15 +17,14 @@ import plotly.graph_objects as go
 import streamlit as st
 from matplotlib.figure import Figure
 
-import persistence as _persistence
-import traffic as _traffic
-from web import animation as _animation, plots as _plots, workspace as _workspace
 
 # Streamlit can retain modules imported before their files were watched.
+# Import and refresh each dependency before importing modules that consume it.
 _refresh_dependencies = False
-for _module in (_traffic, _persistence, _workspace, _plots, _animation):
+for _module_name in ("traffic", "persistence", "web.workspace", "web.plots", "web.animation"):
+    _module = importlib.import_module(_module_name)
     _stamp = Path(_module.__file__).stat().st_mtime_ns
-    if _module is _animation:
+    if _module_name == "web.animation":
         _stamp = (_stamp, Path(_module.__file__).with_name("animation.js").stat().st_mtime_ns)
     if _refresh_dependencies or getattr(_module, "_bridge_loaded_stamp", None) != _stamp:
         importlib.reload(_module)
