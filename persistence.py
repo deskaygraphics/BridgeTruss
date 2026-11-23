@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from bridge_model import Model, Member
 from solver import PreparedTruss
-from moving_loads import deck_path, validate_axles
+from moving_loads import deck_path, scenario_axles
 
 
 def model_document(model, scenario=None):
@@ -56,9 +56,11 @@ def validate_document(doc):
     if not isinstance(scenario, dict):
         raise ValueError("Scenario must be an object")
     if scenario:
-        if set(scenario) != {"enabled", "front_N", "rear_N", "spacing_m", "position_fraction"}:
+        required = {"enabled", "front_N", "rear_N", "spacing_m", "position_fraction"}
+        optional = {"vehicle_count", "vehicle_gap_m"}
+        if not required <= set(scenario) or set(scenario) - required - optional:
             raise ValueError("Invalid vehicle scenario fields")
-        validate_axles([(0, scenario["front_N"]), (scenario["spacing_m"], scenario["rear_N"])])
+        scenario_axles(scenario)
         fraction = scenario["position_fraction"]
         if (
             type(scenario["enabled"]) is not bool
@@ -68,6 +70,8 @@ def validate_document(doc):
             raise ValueError("Invalid vehicle scenario state")
         if scenario["front_N"] > 1e8 or scenario["rear_N"] > 1e8 or scenario["spacing_m"] > 1000:
             raise ValueError("Vehicle exceeds dashboard input limits")
+        if scenario.get("vehicle_gap_m", 4.0) > 1000:
+            raise ValueError("Vehicle gap exceeds dashboard input limits")
         if scenario["enabled"]:
             deck_path(model)
     return model, scenario

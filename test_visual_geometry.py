@@ -1,7 +1,7 @@
 import numpy as np
 import pyvista as pv
 import pytest
-from visual_geometry import make_truck, make_road
+from visual_geometry import make_truck, make_road, make_vehicle
 from bridge_model import Model
 from test_scene3d import NoRenderPlotter
 from scene3d import Scene3D
@@ -85,6 +85,56 @@ def test_cache_invalidation_camera_and_colors():
     assert scene.generation == initial + 1
     scene.render(model, vehicle=(16, 11, 80, 120, 0, 25, 0.18))
     assert scene.generation == initial + 2
+
+
+@pytest.mark.parametrize("kind", ["passenger", "bus"])
+@pytest.mark.parametrize("spacing", [0.0, 0.1, 4.0, 15.0, 1000.0])
+def test_other_vehicle_types_match_axles_and_remain_finite(kind, spacing):
+    parts, radius, note = make_vehicle(pv, spacing, kind)
+    tires = [part for part in parts if part.role == "tire"]
+    assert len(tires) == 4
+    assert {part.wheel_origin[0] for part in tires} == {0, -spacing}
+    assert all(part.wheel_origin[1] == radius for part in tires)
+    assert all(np.all(np.isfinite(part.mesh.points)) for part in parts)
+    assert all(part.mesh.n_points > 0 for part in parts)
+    assert all(
+        part.mesh.bounds[index] <= part.mesh.bounds[index + 1]
+        for part in parts
+        for index in (0, 2, 4)
+    )
+    roles = {part.role for part in parts}
+    assert {"windshield", "headlight", "tire", "hub", "spoke"} <= roles
+    assert ("passenger_body" if kind == "passenger" else "bus_body") in roles
+    if spacing < 1.2 or spacing > 12:
+        assert "schematic" in note.lower()
+
+
+def test_passenger_car_and_bus_have_distinct_profiles():
+    car, car_radius, _ = make_vehicle(pv, 4, "passenger")
+    bus, bus_radius, _ = make_vehicle(pv, 4, "bus")
+    assert max(part.mesh.bounds[3] for part in car) < max(part.mesh.bounds[3] for part in bus)
+    assert car_radius < bus_radius
+    assert len([part for part in bus if part.role == "bus_window"]) == 10
+    assert "cargo" not in {part.role for part in car + bus}
+    with pytest.raises(ValueError, match="Unknown vehicle"):
+        make_vehicle(pv, 4, "unknown")
+
+
+def test_mixed_convoy_wheel_spin_and_axle_alignment():
+    scene = Scene3D(NoRenderPlotter(), pv, lambda entity: None)
+    scene.render(Model(), vehicle=(22, 18, 80, 120, 0, 25, 0.18, 3, 4))
+    generation = scene.generation
+    tires = [(actor, part) for actor, part in scene._vehicle_parts if part.role == "tire"]
+    assert len(tires) == 12
+    old = [(actor, actor.orientation[2]) for actor, _ in tires]
+    assert {round(actor.position[1] - 0.18, 2) for actor, _ in tires} == {0.30, 0.42, 0.46}
+    assert sorted({round(actor.position[0], 6) for actor, _ in tires}) == [2, 6, 10, 14, 18, 22]
+    scene.update_vehicle((23, 19, 80, 120, 0, 25, 0.18, 3, 4))
+    assert scene.generation == generation
+    for (actor, part), (_, angle) in zip(tires, old):
+        radius = part.wheel_origin[1]
+        assert (actor.orientation[2] - angle) % 360 == pytest.approx(-np.degrees(1 / radius) % 360)
+        assert actor.position[1] == pytest.approx(0.18 + radius)
 
 
 def test_numpy_deck_bounds_are_safe_vtk_visibility_flags():

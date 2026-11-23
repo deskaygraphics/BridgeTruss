@@ -2,7 +2,7 @@
 
 import numpy as np
 from moving_loads import deck_path
-from visual_geometry import make_truck, make_road
+from visual_geometry import make_vehicle, make_road, VEHICLE_TYPES
 
 
 def actor_key(actor):
@@ -24,6 +24,9 @@ class Scene3D:
         self._groups = {}
         self._vehicle_parts = []
         self._vehicle_arrows = []
+        self._vehicle_offsets = {}
+        self._vehicle_wheel_radii = {}
+        self._vehicle_types = []
         self._camera_mode = "Isometric"
         self._fit_bounds = None
         self._last_vehicle = None
@@ -103,26 +106,47 @@ class Scene3D:
                 (actor, color) for actor, _ in self.actors.get(("member", index), [])
             ]
 
-    def _build_vehicle(self, spacing):
-        parts, self.wheel_radius, self.vehicle_note = make_truck(self.pv, spacing)
-        for part in parts:
-            entity = ("axle", part.axle) if part.axle is not None else None
-            actor = self.add(part.mesh, part.color, entity, group="vehicle")
-            self._vehicle_parts.append((actor, part))
-        for axle in (0, 1):
-            actor = self.add(
-                self.pv.Arrow(
-                    start=(0, 4.3, 3.5),
-                    direction=(0, -1, 0),
-                    scale=4.1,
-                    shaft_radius=0.025,
-                    tip_length=0.18,
-                ),
-                "#ed5638",
-                ("axle", axle),
-                group="loads",
+    def _build_vehicle(self, spacing, count=1, gap=4.0):
+        notes = []
+        for index in range(count):
+            kind = VEHICLE_TYPES[index]
+            parts, radius, note = make_vehicle(self.pv, spacing, kind)
+            self._vehicle_types.append(kind)
+            notes.append(note)
+            if index == 0:
+                self.wheel_radius = radius
+            offset = index * (spacing + gap)
+            for part in parts:
+                entity = ("axle", part.axle) if part.axle is not None else None
+                actor = self.add(part.mesh, part.color, entity, group="vehicle")
+                self._vehicle_parts.append((actor, part))
+                self._vehicle_offsets[actor_key(actor)] = offset
+                self._vehicle_wheel_radii[actor_key(actor)] = radius
+            for axle in (0, 1):
+                actor = self.add(
+                    self.pv.Arrow(
+                        start=(0, 4.3, 3.5),
+                        direction=(0, -1, 0),
+                        scale=4.1,
+                        shaft_radius=0.025,
+                        tip_length=0.18,
+                    ),
+                    "#ed5638",
+                    ("axle", axle),
+                    group="loads",
+                )
+                self._vehicle_arrows.append(actor)
+        if count == 1:
+            self.vehicle_note = notes[0]
+        else:
+            names = ["truck", "passenger car", "bus"][:count]
+            self.vehicle_note = (
+                " → ".join(names) + f"; rear-to-next-front axle gap {gap:g} m. "
+                "Types are visual; all use the configured shared axle loads and spacing. "
+                "Small gaps can overlap body overhangs."
             )
-            self._vehicle_arrows.append(actor)
+            if any("schematic" in note.lower() for note in notes):
+                self.vehicle_note += " Schematic bodies for extreme axle spacing."
 
     def update_vehicle(self, vehicle, *, render=True):
         """Move existing actors without rebuilding geometry or invalidating picking."""
@@ -136,18 +160,24 @@ class Scene3D:
         for actor in self._groups.get("vehicle", []):
             actor.visibility = show_vehicle and vehicle is not None
         if vehicle is not None:
-            front, rear, front_force, rear_force, xmin, xmax, top = vehicle
-            angle = -np.degrees((front - xmin) / self.wheel_radius) % 360.0
+            front, rear, front_force, rear_force, xmin, xmax, top = vehicle[:7]
+            count, gap = vehicle[7:] if len(vehicle) > 7 else (1, 4.0)
             for actor, part in self._vehicle_parts:
+                vehicle_front = front - self._vehicle_offsets[actor_key(actor)]
+                radius = self._vehicle_wheel_radii[actor_key(actor)]
+                angle = -np.degrees((vehicle_front - xmin) / radius) % 360.0
                 if part.wheel_origin is None:
-                    actor.position = (front, top, 0.0)
+                    actor.position = (vehicle_front, top, 0.0)
                 else:
                     x, y, z = part.wheel_origin
-                    actor.position = (front + x, top + y, z)
+                    actor.position = (vehicle_front + x, top + y, z)
                     actor.orientation = (0.0, 0.0, angle)
-            for actor, x, force in zip(
-                self._vehicle_arrows, (front, rear), (front_force, rear_force)
-            ):
+            axle_positions = [
+                (x - index * (front - rear + gap), force)
+                for index in range(count)
+                for x, force in ((front, front_force), (rear, rear_force))
+            ]
+            for actor, (x, force) in zip(self._vehicle_arrows, axle_positions):
                 actor.position = (x, top, 0.0)
                 actor.visibility = bool(show_loads and force > 0 and xmin <= x <= xmax)
             if self._camera_mode == "Follow vehicle":
@@ -156,7 +186,7 @@ class Scene3D:
             self.plotter.render()
 
     def _follow_camera(self, vehicle):
-        front, rear, *_, top = vehicle
+        front, rear, *_, top = vehicle[:7]
         target = (front - min((front - rear) * 0.4, 4.0), top + 1.3, 2.0)
         self.plotter.camera_position = [(target[0] + 8.0, top + 5.5, 11.0), target, (0.0, 1.0, 0.0)]
         camera = getattr(self.plotter, "camera", None)
@@ -226,6 +256,9 @@ class Scene3D:
         self._groups.clear()
         self._vehicle_parts.clear()
         self._vehicle_arrows.clear()
+        self._vehicle_offsets.clear()
+        self._vehicle_wheel_radii.clear()
+        self._vehicle_types.clear()
         self.vehicle_note = ""
         result = model.results
 
@@ -319,7 +352,8 @@ class Scene3D:
         except ValueError:
             pass  # No invented roadway for an invalid or absent deck path.
         if vehicle is not None and model.nodes:
-            self._build_vehicle(vehicle[0] - vehicle[1])
+            count, gap = vehicle[7:] if len(vehicle) > 7 else (1, 4.0)
+            self._build_vehicle(vehicle[0] - vehicle[1], count, gap)
         p.add_axes()
         p.set_background("#a8c7e8")
         self._member_colors(model, color_by)

@@ -3,12 +3,15 @@ import csv
 import math
 import json
 import os
+import signal
 import time
+import logging
 from copy import deepcopy
 from pathlib import Path
 from datetime import datetime
 import numpy as np
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QOffscreenSurface, QOpenGLContext
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -43,6 +46,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.patches import Polygon, Circle
 
+THREE_D_UNAVAILABLE = ""
 try:
     if os.environ.get("BRIDGETRUSS_NO_3D") == "1":
         raise ImportError("Illustrative 3D disabled by BRIDGETRUSS_NO_3D")
@@ -50,8 +54,9 @@ try:
     from pyvistaqt import QtInteractor
 
     HAS_3D = True
-except Exception:
+except Exception as exc:
     HAS_3D = False
+    THREE_D_UNAVAILABLE = str(exc)
 
 from bridge_model import Model, Member
 from moving_loads import (
@@ -62,12 +67,39 @@ from moving_loads import (
     envelope,
     influence_lines,
     MovingResponse,
+    convoy_axles,
 )
 from persistence import save_model, load_model, export_results, model_document
 from design import compare_trusses, parameter_study
 from redundancy_ui import RedundancyPanel
 from editing import member_edit, load_edit
 from scene3d import Scene3D
+
+
+def configure_graphics():
+    """Allow Qt to select GLX/EGL when the parent shell has disabled both."""
+    if HAS_3D and os.environ.get("QT_XCB_GL_INTEGRATION") == "none":
+        os.environ.pop("QT_XCB_GL_INTEGRATION")
+
+
+def check_opengl():
+    """Check Qt's backend before creating VTK widgets that require OpenGL."""
+    if QApplication.platformName() in ("offscreen", "minimal"):
+        raise RuntimeError("The current Qt display platform does not support interactive 3D")
+    context = QOpenGLContext()
+    if not context.create():
+        raise RuntimeError("Qt could not create an OpenGL context; check the display and driver")
+    surface = QOffscreenSurface()
+    surface.setFormat(context.format())
+    surface.create()
+    try:
+        if not surface.isValid() or not context.makeCurrent(surface):
+            raise RuntimeError("Qt could not activate an OpenGL rendering surface")
+        if context.format().version() < (3, 2):
+            raise RuntimeError("The 3D renderer requires OpenGL 3.2 or newer")
+    finally:
+        context.doneCurrent()
+        surface.destroy()
 
 
 class Plot(FigureCanvasQTAgg):
@@ -602,15 +634,17 @@ class Main(QMainWindow):
         self.panel3d = QWidget()
         layout3d = QVBoxLayout(self.panel3d)
         self.build_3d_controls(layout3d)
+        self.view3 = None
         if HAS_3D:
-            self.view3 = QtInteractor(self.panel3d)
-            layout3d.addWidget(self.view3)
-            self.scene3d = Scene3D(self.view3, pv, self.queue_3d_selection)
+            try:
+                check_opengl()
+                self.view3 = QtInteractor(self.panel3d)
+                layout3d.addWidget(self.view3)
+                self.scene3d = Scene3D(self.view3, pv, self.queue_3d_selection)
+            except Exception as exc:
+                self.disable_3d(str(exc))
         else:
-            self.view3 = QLabel("Install pyvista and pyvistaqt to enable the 3D view")
-            self.view3.setAlignment(Qt.AlignCenter)
-            layout3d.addWidget(self.view3)
-            self.attach3d.setEnabled(False)
+            self.disable_3d(THREE_D_UNAVAILABLE)
         self.tabs.addTab(self.panel3d, "Interactive 3D (planar model)")
         self.forceplot = Plot((8, 4), interactive=True)
         self.tabs.addTab(self.forceplot, "Axial Forces")
@@ -662,6 +696,31 @@ class Main(QMainWindow):
         cv.addWidget(group)
         group = QGroupBox("Moving Vehicle Loads")
         mg = QVBoxLayout(group)
+        mg.addWidget(QLabel("Number of vehicles (1–3)"))
+        self.vehicle_count = QSpinBox()
+        self.vehicle_count.setRange(1, 3)
+        self.vehicle_count.setValue(1)
+        self.vehicle_count.setToolTip(
+            "1: truck; 2: truck + passenger car; 3: truck + passenger car + bus. "
+            "Types are visual; each uses the configured axle forces and spacing."
+        )
+        mg.addWidget(self.vehicle_count)
+        self.vehicle_types_note = QLabel("1: Truck · 2: Passenger car · 3: Bus")
+        self.vehicle_types_note.setWordWrap(True)
+        mg.addWidget(self.vehicle_types_note)
+        mg.addWidget(QLabel("Gap between vehicles"))
+        self.vehicle_gap = QDoubleSpinBox()
+        self.vehicle_gap.setRange(0, 1000)
+        self.vehicle_gap.setValue(4)
+        self.vehicle_gap.setSuffix(" m")
+        self.vehicle_gap.setEnabled(False)
+        self.vehicle_gap.setToolTip(
+            "Rear axle of one vehicle to front axle of the next. "
+            "Body overhangs are illustrative; small gaps can overlap vehicle bodies."
+        )
+        mg.addWidget(self.vehicle_gap)
+        self.vehicle_count.valueChanged.connect(self.moving_changed)
+        self.vehicle_gap.valueChanged.connect(self.moving_changed)
         self.moving_help_button = QPushButton("Moving Load Setup Guide")
         self.moving_help_button.setToolTip(
             "Step-by-step help: deck nodes, axle forces, playback and response envelopes. "
@@ -725,7 +784,7 @@ class Main(QMainWindow):
             "Enable moving loads to update results; at the endpoints the vehicle is off the bridge."
         )
         self.vehicle_position.valueChanged.connect(self.moving_changed)
-        mg.addWidget(QLabel("Vehicle front axle position"))
+        mg.addWidget(QLabel("Leading vehicle front axle position"))
         mg.addWidget(self.vehicle_position)
         self.position_label = QLabel("0.00 m")
         self.position_label.setWordWrap(True)
@@ -751,7 +810,7 @@ class Main(QMainWindow):
         )
         reset.clicked.connect(self.reset_vehicle)
         buttons.addWidget(reset)
-        mg.addLayout(buttons)
+        mg.insertLayout(mg.indexOf(self.moving_toggle) + 1, buttons)
         self.envelope_button = QPushButton("Compute Signed Envelopes")
         self.envelope_button.setToolTip(
             "Find minimum/maximum member forces, stresses, displacement components and reactions "
@@ -764,7 +823,7 @@ class Main(QMainWindow):
         note = QLabel("Quasi-static; explicit deck nodes. Full entry-to-exit travel.")
         note.setWordWrap(True)
         mg.addWidget(note)
-        cv.addWidget(group)
+        cv.insertWidget(0, group)
         group = QGroupBox("Legend")
         gg = QVBoxLayout(group)
         gg.addWidget(QLabel("🔴  Positive = Tension"))
@@ -854,6 +913,10 @@ class Main(QMainWindow):
         self.tabs.currentChanged.connect(self.on_view_tab_changed)
         self.analyze()
 
+    def show_analytical_verification(self):
+        self.tabs.setCurrentWidget(self.redundancy_panel)
+        self.redundancy_panel.detail.setCurrentWidget(self.redundancy_panel.verification_panel)
+
     def on_view_tab_changed(self, *args):
         self.refresh()
         if self.tabs.currentWidget() is self.panel3d and not self._3d_presented:
@@ -895,14 +958,19 @@ class Main(QMainWindow):
                 "<li><b>Choose whether to include static loads.</b> Existing static nodal "
                 "loads remain active. For vehicle-only results, use <b>Clear Static Loads</b> "
                 "in the left sidebar and confirm the removal.</li>"
-                "<li><b>Define the vehicle.</b> In the right sidebar's <b>Moving Vehicle Loads</b> "
-                "section, try <b>80 kN front axle</b>, <b>120 kN rear axle</b> and "
+                "<li><b>Define the vehicles.</b> In the right sidebar's <b>Moving Vehicle Loads</b> "
+                "choose <b>Number of vehicles (1–3)</b>. "
+                "The convoy order is <b>truck, passenger car, bus</b>. Types are illustrative, "
+                "not automatic vehicle weights. For two or three vehicles, set "
+                "<b>Gap between vehicles</b>: rear axle of one to front axle of the next. "
+                "Every vehicle shares the axle forces and axle spacing. For each vehicle, "
+                "try <b>80 kN front axle</b>, <b>120 kN rear axle</b> and "
                 "<b>4 m axle spacing</b>. Positive axle forces act <b>downward</b>. "
                 "The rear axle follows the front; a zero force disables that axle.</li>"
                 "<li><b>Enable and position.</b> Check <b>Enable moving loads</b>, then drag "
                 "the vehicle-position slider. It controls the front axle's x coordinate "
-                "from before entry through the rear axle's complete exit. At the start "
-                "and end both axles are outside the bridge, so only static loads remain. "
+                "from before entry through the last vehicle's rear axle's complete exit. At the start "
+                "and end all axles are outside the bridge, so only static loads remain. "
                 "Move the slider inward if you do not yet see a vehicle load.</li>"
                 "<li><b>Animate and inspect.</b> Set <b>Response step</b> to, for example, "
                 "<b>0.5 m/step</b>, then press <b>Play</b>. Pause stops playback; "
@@ -1004,9 +1072,42 @@ class Main(QMainWindow):
         self.vehicle_note3d.setWordWrap(True)
         layout.addWidget(self.vehicle_note3d)
 
-    def fit_3d_view(self):
+    def disable_3d(self, reason):
+        self.scene3d = None
+        layout = self.panel3d.layout()
+        if self.view3 is not None:
+            layout.removeWidget(self.view3)
+            self.view3.hide()
+            try:
+                self.view3.close()
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "Could not close the 3D renderer", exc_info=True
+                )
+            self.view3.deleteLater()
+        self.view3 = QLabel(
+            f"3D view unavailable: {reason}\n\n"
+            "The 2D plots and structural analysis remain available.\n"
+            "Check your OpenGL driver and restart to retry 3D."
+        )
+        self.view3.setTextFormat(Qt.PlainText)
+        self.view3.setWordWrap(True)
+        self.view3.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.view3)
+        for widget in self.panel3d.findChildren(QWidget):
+            if isinstance(widget, (QPushButton, QCheckBox, QComboBox)):
+                widget.setEnabled(False)
+        logging.getLogger(__name__).warning("3D view unavailable: %s", reason)
+
+    def call_scene3d(self, method, *args, **kwargs):
         if self.scene3d is not None:
-            self.scene3d.fit()
+            try:
+                return getattr(self.scene3d, method)(*args, **kwargs)
+            except Exception as exc:
+                self.disable_3d(str(exc))
+
+    def fit_3d_view(self):
+        self.call_scene3d("fit")
 
     def queue_3d_selection(self, entity):
         # Finish VTK's picking callback before rebuilding geometry after an attach.
@@ -1033,7 +1134,7 @@ class Main(QMainWindow):
             self.edit3d.setEnabled(False)
             self.remove3d.setEnabled(False)
         if self.scene3d is not None:
-            self.scene3d.highlight(render=not self._in_animation)
+            self.call_scene3d("highlight", render=not self._in_animation)
 
     def toggle_attach_3d(self, enabled):
         self.stop_vehicle()
@@ -1068,7 +1169,7 @@ class Main(QMainWindow):
                 self.attach_anchor = identity
                 self.selection3d.setText(f"First joint N{identity}; right-click the second joint.")
                 if self.scene3d is not None:
-                    self.scene3d.highlight(anchor=("node", identity))
+                    self.call_scene3d("highlight", anchor=("node", identity))
                 return
             a = self.attach_anchor
             self.apply_3d_edit(
@@ -1088,10 +1189,10 @@ class Main(QMainWindow):
             text = f"Joint N{identity}: static Fx={fx / 1000:g}, Fy={fy / 1000:g} kN. Edit to add/change/reattach its static load; Remove removes only its load."
         else:
             widget = self.axle_front if identity == 0 else self.axle_rear
-            text = f"{'Front' if identity == 0 else 'Rear'} vehicle axle: {widget.value():g} kN. Edit force/spacing; Remove sets force to zero."
+            text = f"{'Front' if identity == 0 else 'Rear'} axle on all {self.vehicle_count.value()} vehicle(s): {widget.value():g} kN. Edit shared force/spacing; Remove sets this axle force to zero on every vehicle."
         self.selection3d.setText(text)
         if self.scene3d is not None:
-            self.scene3d.highlight(entity)
+            self.call_scene3d("highlight", entity)
 
     def apply_3d_edit(self, operation):
         previous = deepcopy(self.model)
@@ -1122,6 +1223,8 @@ class Main(QMainWindow):
             self.axle_front,
             self.axle_rear,
             self.axle_spacing,
+            self.vehicle_count,
+            self.vehicle_gap,
             self.vehicle_position,
         )
         for control in controls:
@@ -1131,6 +1234,9 @@ class Main(QMainWindow):
         self.axle_front.setValue(state["front_N"] / 1000)
         self.axle_rear.setValue(state["rear_N"] / 1000)
         self.axle_spacing.setValue(state["spacing_m"])
+        self.vehicle_count.setValue(state.get("vehicle_count", 1))
+        self.vehicle_gap.setValue(state.get("vehicle_gap_m", 4))
+        self.vehicle_gap.setEnabled(self.vehicle_count.value() > 1)
         self.vehicle_position.setValue(round(state["position_fraction"] * 1000))
         for control in controls:
             control.blockSignals(False)
@@ -1238,7 +1344,7 @@ class Main(QMainWindow):
     def edit_axle_3d(self, axle):
         widget = self.axle_front if axle == 0 else self.axle_rear
         force, ok = QInputDialog.getDouble(
-            self, "Vehicle axle", "Downward force (kN):", widget.value(), 0, 100000, 2
+            self, "Vehicle axle", "Downward force per vehicle (kN):", widget.value(), 0, 100000, 2
         )
         if not ok:
             return
@@ -1623,6 +1729,8 @@ class Main(QMainWindow):
             "front_N": self.axle_front.value() * 1000,
             "rear_N": self.axle_rear.value() * 1000,
             "spacing_m": self.axle_spacing.value(),
+            "vehicle_count": self.vehicle_count.value(),
+            "vehicle_gap_m": self.vehicle_gap.value(),
             "position_fraction": self.vehicle_position.value() / 1000,
         }
 
@@ -1642,7 +1750,11 @@ class Main(QMainWindow):
     def open_project(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open model", "", "JSON (*.json)")
         if not path:
-            return
+            return False
+        return self.load_project(path)
+
+    def load_project(self, path):
+        """Load a file or supplied example, confirming before replacing the model."""
         try:
             model, state = load_model(path)
             if state:
@@ -1660,6 +1772,14 @@ class Main(QMainWindow):
                             f"{key} exceeds dashboard precision; adjust the JSON explicitly "
                             "before opening. The current model has not been replaced."
                         )
+                gap = state.get("vehicle_gap_m", 4.0)
+                if not np.isclose(
+                    gap, round(gap, self.vehicle_gap.decimals()), rtol=1e-12, atol=1e-12
+                ):
+                    raise ValueError(
+                        "vehicle_gap_m exceeds dashboard precision; "
+                        "the current model has not been replaced."
+                    )
                 fraction = state["position_fraction"]
                 if not np.isclose(fraction, round(fraction * 1000) / 1000, rtol=1e-12, atol=1e-12):
                     raise ValueError(
@@ -1668,18 +1788,18 @@ class Main(QMainWindow):
                     )
         except Exception as e:
             QMessageBox.warning(self, "Open model", str(e))
-            return
+            return False
         if (
             QMessageBox.question(
                 self,
                 "Replace model",
-                "Replace the current model with this file?",
+                "Replace the current model with this file? Unsaved changes will be lost.",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
             != QMessageBox.Yes
         ):
-            return
+            return False
         self.stop_vehicle()
         self.model = model
         self.clear_playback_history()
@@ -1690,6 +1810,8 @@ class Main(QMainWindow):
             self.axle_front,
             self.axle_rear,
             self.axle_spacing,
+            self.vehicle_count,
+            self.vehicle_gap,
             self.vehicle_position,
         ]
         for widget in widgets:
@@ -1700,11 +1822,15 @@ class Main(QMainWindow):
         self.axle_front.setValue(state.get("front_N", 80000) / 1000)
         self.axle_rear.setValue(state.get("rear_N", 120000) / 1000)
         self.axle_spacing.setValue(state.get("spacing_m", 4))
+        self.vehicle_count.setValue(state.get("vehicle_count", 1))
+        self.vehicle_gap.setValue(state.get("vehicle_gap_m", 4))
+        self.vehicle_gap.setEnabled(self.vehicle_count.value() > 1)
         self.vehicle_position.setValue(round(state.get("position_fraction", 0) * 1000))
         for widget in widgets:
             widget.blockSignals(False)
         self.position_label.setText(f"{self.front_position():.2f} m")
         self.analyze()
+        return True
 
     def export_bundle(self):
         self.stop_vehicle()
@@ -1863,7 +1989,7 @@ class Main(QMainWindow):
         except ValueError:
             xmin, xmax = self.bridge_limits()
             top = min(v[1] for v in self.model.nodes.values()) + 0.18
-        return (
+        vehicle = (
             front,
             front - self.axle_spacing.value(),
             self.axle_front.value(),
@@ -1872,11 +1998,15 @@ class Main(QMainWindow):
             xmax,
             top,
         )
+        if self.vehicle_count.value() > 1:
+            vehicle += (self.vehicle_count.value(), self.vehicle_gap.value())
+        return vehicle
 
     def render_scene(self):
         if self.scene3d is None:
             return
-        self.scene3d.render(
+        self.call_scene3d(
+            "render",
             self.model,
             deformed=self.deformed.isChecked(),
             color_by=self.color.currentText(),
@@ -1887,6 +2017,8 @@ class Main(QMainWindow):
             show_loads=self.show_loads3d.isChecked(),
             camera_mode=self.camera3d.currentText(),
         )
+        if self.scene3d is None:
+            return
         note = (
             self.scene3d.vehicle_note
             or "Illustrative reference roadway; no added stiffness or self-weight."
@@ -1986,10 +2118,13 @@ class Main(QMainWindow):
         return (min(xs), max(xs)) if xs else (0.0, 1.0)
 
     def axles(self):
-        return [
-            (0.0, self.axle_front.value() * 1000),
-            (self.axle_spacing.value(), self.axle_rear.value() * 1000),
-        ]
+        return convoy_axles(
+            self.axle_front.value() * 1000,
+            self.axle_rear.value() * 1000,
+            self.axle_spacing.value(),
+            self.vehicle_count.value(),
+            self.vehicle_gap.value(),
+        )
 
     def front_at_fraction(self, fraction):
         try:
@@ -2008,6 +2143,7 @@ class Main(QMainWindow):
         return vehicle_loads(self.model, self.front_position(), self.axles())
 
     def moving_changed(self, *args):
+        self.vehicle_gap.setEnabled(self.vehicle_count.value() > 1)
         if not self._in_animation:
             self.stop_vehicle(sync=False)
             self._visual_fraction = None
@@ -2088,8 +2224,10 @@ class Main(QMainWindow):
             return
         self.update_playback_labels()
         if self.scene3d is not None and not did_solve:
-            self.scene3d.update_vehicle(
-                self.vehicle_visual(), render=self.tabs.currentWidget() is self.panel3d
+            self.call_scene3d(
+                "update_vehicle",
+                self.vehicle_visual(),
+                render=self.tabs.currentWidget() is self.panel3d,
             )
         visual = self.front_at_fraction(self._visual_fraction)
         self.position_label.setText(f"{visual:.2f} m (tables: {self.front_position():.2f} m)")
@@ -2320,8 +2458,13 @@ class Main(QMainWindow):
     def closeEvent(self, event):
         self.stop_vehicle(sync=False)
         if self.scene3d is not None:
-            self.view3.close()
             self.scene3d = None
+            try:
+                self.view3.close()
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "Could not close the 3D renderer", exc_info=True
+                )
         super().closeEvent(event)
 
     def export_csv(self):
@@ -2344,8 +2487,22 @@ class Main(QMainWindow):
         self.statusBar().showMessage("Saved " + path)
 
 
-if __name__ == "__main__":
+def main():
+    configure_graphics()
     app = QApplication(sys.argv)
-    w = Main()
-    w.show()
-    sys.exit(app.exec())
+    previous_sigint = signal.signal(signal.SIGINT, lambda *_: app.closeAllWindows())
+    # Let Python process terminal signals even when Qt has no pending events.
+    signal_timer = QTimer(app)
+    signal_timer.timeout.connect(lambda: None)
+    signal_timer.start(100)
+    try:
+        window = Main()
+        window.show()
+        return app.exec()
+    finally:
+        signal_timer.stop()
+        signal.signal(signal.SIGINT, previous_sigint)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

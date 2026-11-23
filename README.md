@@ -9,7 +9,8 @@ Two interfaces are available:
 - **Desktop application:** full model editing, moving-load analysis, design studies
   and optional 3D visualization.
 - **Browser application:** a lightweight Streamlit interface for running supplied
-  redundancy examples, comparing results and downloading numerical data.
+  redundancy examples, animating 1–3 moving vehicles, comparing results and
+  downloading numerical data.
 
 Both interfaces use the same numerical analysis modules. The software is an
 educational analysis tool, not a certified bridge-design application.
@@ -62,6 +63,7 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 For later sessions, activate the same environment and run `python main.py`.
+Close the window or press Ctrl+C in the launching terminal to exit cleanly.
 
 The desktop stack uses NumPy, PySide6, Matplotlib, PyVista and PyVistaQt.
 `requirements-dev.txt` adds testing and linting dependencies.
@@ -95,9 +97,10 @@ Keep the terminal running while using the application. Press Ctrl+C in that
 terminal to stop the server.
 
 The browser requirements install Streamlit, NumPy and Matplotlib; Qt and VTK are
-not required. The browser interface does not include the full desktop geometry
-editor or the interactive 3D scene. A localhost address is accessible on your own
-computer, not a public hosting URL.
+not required. Its interactive Canvas animation provides a projected 3D bridge
+with truck, passenger-car and bus models, without external JavaScript downloads.
+It does not include the desktop geometry editor or member picking.
+A localhost address is accessible on your own computer, not a public hosting URL.
 
 ## Desktop usage
 
@@ -127,12 +130,27 @@ computer, not a public hosting URL.
 
 1. Use **Select Deck Nodes** to define the load-transfer path. Presets already
    select their bottom-chord deck joints.
-2. Enable moving loads and enter the front/rear axle forces and their spacing.
-3. Use the position slider or **Play** to inspect successive quasi-static states.
-4. Click **Compute Signed Envelopes** for minimum/maximum responses and the
+2. In **Moving Vehicle Loads** at the top of the right sidebar, choose **Number of
+   vehicles (1–3)**. For multiple vehicles, set **Gap between vehicles** (rear axle
+   of one vehicle to front axle of the next; default 4 m).
+3. Enable moving loads and enter the front/rear axle forces and axle spacing.
+   Every vehicle uses these same values; they are per-vehicle forces, not totals.
+   With two vehicles, the convoy is a **truck followed by a passenger car**; with
+   three, a **bus** follows the passenger car. Their bodies, colors, windows and
+   wheels are visually distinct. Types do not assign assumed axle weights:
+   numerical loads still come from the configured forces and axle spacing.
+4. Use the position slider or **Play** to inspect successive quasi-static states.
+   Open **Interactive 3D** to see all vehicles moving together. Playback continues
+   until the last vehicle's rear axle exits. The slider tracks the leading front axle.
+5. Click **Compute Signed Envelopes** for minimum/maximum responses and the
    corresponding front-axle positions over the full crossing.
-5. Use **Influence Lines** for responses to a downward 1 N load; these exclude
+6. Use **Influence Lines** for responses to a downward 1 N load; these exclude
    existing static loads.
+Count and gap are included in saved scenarios and exports. Existing project files
+without those settings open with one vehicle. The solver includes every axle in
+the convoy; the extra vehicles are not just visual copies. Selecting an axle in
+3D edits the shared front/rear force for every vehicle. Very small gaps can
+overlap the illustrative body overhangs; the specified axle positions remain exact.
 
 Existing static loads remain active unless explicitly removed with **Clear Static
 Loads**. Envelope accuracy does not depend on the animation step or frame rate.
@@ -163,14 +181,20 @@ force redistribution, nodal displacements and full-passage extrema. Force diagra
 use the same load position for every candidate; unrelated envelope peaks are not
 shown as one simultaneous load case. **Enlarge Comparison** opens a larger view.
 
-To run the supplied redundant-bridge example:
+To run a supplied redundancy study, click **Open** and select
+`examples/redundant_bridge.json` (member **18**) or
+`examples/benchmark_redundant.json` (member **4**, static loading). In
+**Redundancy Study**, set the member and area factors, then click
+**Run Redundancy Study**. Rejected candidates display a reason instead of a finite
+response. These study files are separate from the moving-vehicle controls.
 
-1. Open `examples/redundant_bridge.json`.
-2. Select **Redundancy Study** and choose original member **18**.
-3. Keep the default area factors `1,0.75,0.5,0.25,0`, or enter your own.
-4. Click **Run Redundancy Study**, then choose a candidate to compare.
-5. Inspect the case summary, member-force changes and common-case displacements.
-   Rejected candidates display a reason instead of a finite response.
+Within **Redundancy Study**, open **Analytical Verification** to run 49 comparisons
+against the supplied triangle's independent hand equations. The panel shows
+reference/computed values, units, absolute errors, tolerances, relative errors
+(where the reference is nonzero), and PASS/FAIL results. Use **Run Analytical
+Verification** to repeat the checks. This always checks the shipped static
+triangle, not the active project, and does not change your model, vehicle settings,
+or current study. Passing verifies those benchmark cases, not structural safety.
 
 **Design Exploration** evaluates a finite grid of heights and chord/web area factors.
 Feasibility means satisfying the entered displacement and axial-stress screening
@@ -278,15 +302,28 @@ After starting Streamlit using the installation instructions above:
 2. Set **Selected member area remaining (%)**. Zero removes the member; the
    original baseline is retained for comparison.
 3. For bridge examples, enable or disable **Include complete vehicle passage**.
-   Expand **Vehicle inputs (optional)** to adjust axle forces and spacing.
-   The triangle always uses its prescribed static load.
-4. Click **Run example**.
-5. Inspect **Comparison figures**, **Numerical results** and **Assumptions**.
+   Choose **Number of vehicles** (truck; truck + passenger car; or truck +
+   passenger car + bus) and **Gap between vehicles (m)**. Gap means rear axle of
+   one vehicle to front axle of the next. Expand **Axle forces and spacing
+   (per vehicle)** to adjust shared axle forces and wheelbase. Vehicle types are
+   visual, not assumed weights. The triangle always uses its prescribed static load.
+4. In **Animated moving vehicles — baseline**, use **Play/Pause**, **Reset**, the
+   leading-axle position slider, playback speed, camera view and deformation overlay.
+   Drag the scene to orbit. The live displacement readout includes static loads
+   and all active convoy axles, using the same solver response coefficients as desktop.
+   Playback speed is illustrative, not physical speed or a dynamic analysis.
+5. Click **Run example** to calculate the complete-passage study for the selected convoy.
+6. Inspect **Comparison figures**, **Numerical results**, and **Assumptions**.
    Expand the independent-verification section for hand-reference values,
    computed values, errors and tolerances.
-6. Download the study JSON or summary CSV if needed.
+7. Download the study JSON or summary CSV if needed. The JSON records the vehicle
+   count, gap, and complete axle list used in the calculations.
 
 Changing an input clears the previous result; click **Run example** again.
+The animation always shows the unmodified baseline, even when a member-removal
+candidate is rejected. It is not a prediction of that candidate's movement.
+The study plots show labeled common-load-case and envelope results, not the live
+animation position.
 An accepted stiffness solution is not a structural safety assessment.
 
 ### Browser tests
@@ -294,9 +331,13 @@ An accepted stiffness solution is not a structural safety assessment.
 With the browser environment activated:
 
 ```bash
-python -m pip install pytest
+python -m pip install -r web/requirements-dev.txt
 python -m pytest web -q
 ```
+
+Browser animation tests use Playwright with a separate headless Chrome/Chromium
+session and never use your browser profile. If Chrome/Chromium is not on `PATH`,
+those browser checks are skipped; numerical and Streamlit tests still run.
 
 ## Troubleshooting
 
@@ -304,8 +345,13 @@ python -m pytest web -q
   its requirements using `python -m pip`. Desktop and browser dependencies are separate.
 - **Qt xcb cursor error on Ubuntu:** check that the system package
   `libxcb-cursor0` is installed.
-- **OpenGL or 3D initialization failure:** try `BRIDGETRUSS_NO_3D=1 python main.py`
-  or use the browser interface for the supplied numerical examples.
+- **OpenGL or 3D initialization failure:** the application checks Qt's OpenGL
+  context before initializing 3D. If initialization or a rendering operation raises
+  an exception, the 3D tab displays the reason while 2D analysis remains available.
+  The launcher removes an inherited `QT_XCB_GL_INTEGRATION=none` override when
+  3D is enabled so Qt can select GLX/EGL; explicit backend choices are preserved.
+  Use `BRIDGETRUSS_NO_3D=1 python main.py` to skip 3D entirely, including when a
+  graphics driver crashes or hangs in native code (which Python cannot catch).
 - **Unstable or ill-conditioned model:** review supports, connectivity and member
   properties. The solver does not add artificial stiffness to conceal instability.
 - **Invalid deck path:** select at least two distinct existing joints at a common

@@ -1,4 +1,4 @@
-"""Read-only redundancy comparisons; the active dashboard model is never edited."""
+"""Read-only redundancy comparisons and independent verification."""
 
 from PySide6.QtWidgets import (
     QWidget,
@@ -20,6 +20,7 @@ from matplotlib.figure import Figure
 
 from redundancy import redundancy_study
 from redundancy_plots import draw_comparison
+from example_studies import verification_rows
 
 
 def fmt(value, scale=1):
@@ -34,8 +35,8 @@ class RedundancyPanel(QWidget):
         note = QLabel(
             "Reduce one member's area; 0 physically removes it. The active model stays unchanged. "
             "Enable moving loads for full-passage envelopes; otherwise static loads only. "
-            "Presets are determinate: open examples/redundant_bridge.json (M18) or "
-            "benchmark_redundant.json (M4) to demonstrate redundancy. "
+            "Open examples/redundant_bridge.json (M18) or benchmark_redundant.json (M4) "
+            "to demonstrate redundancy. "
             "Rejected cases have no valid response, not a predicted collapse load."
         )
         note.setWordWrap(True)
@@ -121,7 +122,97 @@ class RedundancyPanel(QWidget):
             ],
             "Common-case displacements",
         )
+        self.build_verification_panel()
         layout.addWidget(self.detail)
+
+    def build_verification_panel(self):
+        self.verification_panel = QWidget()
+        layout = QVBoxLayout(self.verification_panel)
+        self.verification_equations = QLabel(
+            "Independent verification — supplied redundant triangle, static 1 kN apex load.\n"
+            "These checks always use the supplied benchmark, NOT the active project.\n\n"
+            "f = (√2 + 1/2)Lv/(EA); k₄ = αEA/Lv; Q = P/(1 + k₄f)\n"
+            "Equilibrium: P = Q + k₄δ; compatibility: δ = Qf.\n"
+            "Apex uy = −Qf; tie N = Q/2; diagonal N = −Q/√2.\n"
+            "P = 1000 N; EA = 2 × 10⁹ N; Lv = 1 m; α = A/A₀ for member M4.\n\n"
+            "Hand-reference equations are independent of the stiffness assembly. "
+            "Agreement verifies these cases, not real-bridge prediction accuracy."
+        )
+        self.verification_equations.setWordWrap(True)
+        layout.addWidget(self.verification_equations)
+        self.verify_button = QPushButton("Run Analytical Verification")
+        self.verify_button.clicked.connect(self.run_verification)
+        layout.addWidget(self.verify_button)
+        self.verification_summary = QLabel(
+            "Open this tab or run verification to check the benchmark."
+        )
+        self.verification_summary.setWordWrap(True)
+        layout.addWidget(self.verification_summary)
+        self.verification_table = QTableWidget(0, 9)
+        self.verification_table.setHorizontalHeaderLabels(
+            [
+                "A/A0",
+                "Response",
+                "Unit",
+                "Reference",
+                "Computed",
+                "Absolute error",
+                "Absolute tolerance",
+                "Relative error (%)",
+                "Result",
+            ]
+        )
+        self.verification_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        layout.addWidget(self.verification_table)
+        self.verification_checks = None
+        self.detail.addTab(self.verification_panel, "Analytical Verification")
+        self.detail.currentChanged.connect(self.on_detail_changed)
+
+    def on_detail_changed(self, *args):
+        if (
+            self.detail.currentWidget() is self.verification_panel
+            and self.verification_checks is None
+        ):
+            self.run_verification()
+
+    def run_verification(self):
+        self.verification_checks = None
+        self.verification_table.setRowCount(0)
+        try:
+            checks = verification_rows()
+            self.window.fill_table(
+                self.verification_table,
+                [
+                    [
+                        row["area_factor"],
+                        row["response"],
+                        row["unit"],
+                        *[
+                            f"{row[key]:.6e}"
+                            for key in (
+                                "reference",
+                                "computed",
+                                "absolute_error",
+                                "absolute_tolerance",
+                            )
+                        ],
+                        f"{row['absolute_error'] / abs(row['reference']) * 100:.6e}"
+                        if row["reference"]
+                        else "—",
+                        "PASS" if row["passed"] else "FAIL",
+                    ]
+                    for row in checks
+                ],
+            )
+            self.verification_checks = checks
+            passed = sum(row["passed"] for row in checks)
+            self.verification_summary.setText(
+                f"{passed}/{len(checks)} analytical comparisons passed "
+                "for the supplied triangle (not the active project)."
+            )
+        except Exception as exc:
+            self.verification_table.setRowCount(0)
+            self.verification_summary.setText(f"Analytical verification unavailable: {exc}")
 
     def table(self, headers, title):
         table = QTableWidget(0, len(headers))

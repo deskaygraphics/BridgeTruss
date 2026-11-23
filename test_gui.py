@@ -6,6 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ["BRIDGETRUSS_NO_3D"] = "1"
 import numpy as np
 import pytest
+import main as application
 from PySide6.QtWidgets import QApplication, QMessageBox, QFileDialog
 from main import Main
 from persistence import save_model
@@ -29,6 +30,67 @@ def window(app, monkeypatch):
     instance.stop_vehicle()
     instance.close()
     app.processEvents()
+
+
+@pytest.mark.parametrize("stage", ["preflight", "interactor", "scene"])
+def test_3d_startup_failure_keeps_analysis_available(app, monkeypatch, stage):
+    from PySide6.QtWidgets import QWidget
+
+    views = []
+
+    def fail(*args, **kwargs):
+        raise RuntimeError(f"{stage} OpenGL failure")
+
+    def interactor(parent):
+        view = QWidget(parent)
+        views.append(view)
+        return view
+
+    monkeypatch.setattr(application, "HAS_3D", True)
+    monkeypatch.setattr(application, "pv", object(), raising=False)
+    monkeypatch.setattr(application, "check_opengl", fail if stage == "preflight" else lambda: None)
+    monkeypatch.setattr(
+        application, "QtInteractor", fail if stage == "interactor" else interactor, raising=False
+    )
+    monkeypatch.setattr(application, "Scene3D", fail)
+    w = Main()
+    try:
+        assert w.scene3d is None
+        assert f"{stage} OpenGL failure" in w.view3.text()
+        assert not w.attach3d.isEnabled()
+        assert not w.camera3d.isEnabled()
+        assert w.model.results is not None
+        assert w.members_table.rowCount() == len(w.model.members)
+        assert all(not view.isVisible() for view in views)
+        w.refresh()
+        w.fit_3d_view()
+    finally:
+        w.close()
+        app.processEvents()
+
+
+@pytest.mark.parametrize("method", ["render", "fit", "highlight", "update_vehicle"])
+def test_3d_runtime_failure_keeps_analysis_available(window, method):
+    from types import SimpleNamespace
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("Lost rendering context")
+
+    window.scene3d = SimpleNamespace(**{method: fail})
+    if method == "render":
+        window.render_scene()
+    elif method == "fit":
+        window.fit_3d_view()
+    elif method == "highlight":
+        window.clear_selection_3d()
+    else:
+        window.call_scene3d(method, None)
+    assert window.scene3d is None
+    assert "Lost rendering context" in window.view3.text()
+    assert not window.attach3d.isEnabled()
+    window.analyze()
+    assert window.model.results is not None
+    assert not window.test_errors
 
 
 def test_analysis_tabs_and_failure_invalidation(window):
