@@ -1,45 +1,68 @@
-"""Browser animation payloads; no Qt, VTK, Streamlit or third-party JavaScript."""
+"""Self-contained client animation; Streamlit only sends solved response snapshots."""
 
 import json
 from pathlib import Path
 
-from example_studies import vehicle_example
-from moving_loads import MovingResponse, travel_limits
+from plotly.offline import get_plotlyjs
+from streamlit.components.v2 import component
+
+from web.plots import CONFIG
 
 
-def animation_payload(
-    preset, front_kN=80, rear_kN=120, spacing_m=4, vehicle_count=1, vehicle_gap_m=4
-):
-    model, axles = vehicle_example(
-        preset, True, front_kN, rear_kN, spacing_m, vehicle_count, vehicle_gap_m
+_library = component(
+    "bridgetruss_plotly_runtime",
+    js=get_plotlyjs() + "\nexport default function() {}\n",
+)
+_scene = component(
+    "bridgetruss_animated_scene",
+    html=(
+        '<div class="bridge-live-scene" data-testid="bridge-live-scene">'
+        '<div class="bridge-live-plot"></div>'
+        '<div class="bridge-live-position" role="status"></div></div>'
+    ),
+    css=(
+        ".bridge-live-scene{width:100%;color:#edf2f8}"
+        ".bridge-live-plot{height:450px;width:100%}"
+        ".bridge-live-position{font-size:12px;padding:6px 10px;color:#b4c4d4}"
+    ),
+    js=Path(__file__).with_name("animation.js").read_text(),
+    isolate_styles=False,
+)
+
+
+def load_animation_runtime():
+    # Outside the timed fragment: never resend the library with response updates.
+    _library(key="bridge_animation_runtime", height=0)
+
+
+def animated_scene(fig, workspace, camera, fit):
+    try:
+        clock = workspace.playback_clock()
+    except ValueError:
+        clock = {
+            "playing": False,
+            "fraction": 0,
+            "lo": 0,
+            "hi": 1,
+            "rate": 0,
+            "solved": 0,
+            "run": [workspace.revision, workspace.play_generation],
+        }
+    _scene(
+        key="bridge_animated_scene",
+        data={
+            "figure": json.loads(fig.to_json()),
+            "clock": clock,
+            "config": CONFIG,
+            "camera": camera,
+            "fit": fit,
+        },
+        height=490,
     )
-    if axles is None:
-        return None  # The hand-check triangle is static, even if requested otherwise.
-    response = MovingResponse(model)
-    ids = response.prepared.ids
-    lo, hi = travel_limits(model, axles)
-    epsilon = max(hi - lo, 1.0) * 1e-8
-    return {
-        "nodes": [[nid, *model.nodes[nid][:2]] for nid in ids],
-        "members": [[member.a, member.b] for member in model.members],
-        "supports": list(model.fixed),
-        "deck": [[nid, model.nodes[nid][0]] for nid in response.deck_nodes],
-        "deck_y": model.nodes[response.deck_nodes[0]][1],
-        "axles": axles,
-        "spacing": spacing_m,
-        "gap": vehicle_gap_m,
-        "types": ["truck", "passenger car", "bus"][:vehicle_count],
-        "limits": [lo - epsilon, hi + epsilon],
-        "static_u": response.displacements[:, 0].tolist(),
-        "deck_unit_u": response.displacements[:, 1:].T.tolist(),
-        "response_scope": "Unmodified baseline: static loads plus current convoy position",
-    }
 
 
-def animation_html(payload):
-    """Embed finite JSON safely inside a fully self-contained component."""
-    content = json.dumps(payload, allow_nan=False, separators=(",", ":"))
-    for character, escaped in (("<", "\\u003c"), (">", "\\u003e"), ("&", "\\u0026")):
-        content = content.replace(character, escaped)
-    template = Path(__file__).with_name("vehicle_scene.html").read_text(encoding="utf-8")
-    return template.replace("__ANIMATION_DATA__", content)
+# Allow the running application to refresh the registered JS without losing models.
+_bridge_loaded_stamp = (
+    Path(__file__).stat().st_mtime_ns,
+    Path(__file__).with_name("animation.js").stat().st_mtime_ns,
+)

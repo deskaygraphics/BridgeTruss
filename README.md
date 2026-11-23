@@ -1,4 +1,5 @@
 # BridgeTruss
+![BridgeTruss application logo](assets/bridgetruss.png)
 
 BridgeTruss is a Python application for matrix analysis of planar bridge trusses
 under static and quasi-static moving loads. It combines an editable desktop
@@ -8,12 +9,26 @@ reproducible model and result exports.
 Two interfaces are available:
 - **Desktop application:** full model editing, moving-load analysis, design studies
   and optional 3D visualization.
-- **Browser application:** a lightweight Streamlit interface for running supplied
-  redundancy examples, animating 1–3 moving vehicles, comparing results and
-  downloading numerical data.
+- **Browser application:** a desktop-style Streamlit workspace with model editing,
+  interactive 2D/3D views, moving loads, result tables, design/redundancy studies
+  and desktop-compatible model files. Both interfaces support traffic profiles
+  with up to three simultaneous vehicles. The original guided
+  demo is also available.
 
 Both interfaces use the same numerical analysis modules. The software is an
 educational analysis tool, not a certified bridge-design application.
+
+## Quick start
+
+- **Use online:** open [BridgeTruss in your browser](https://bridgetrus.streamlit.app/).
+  No installation is required.
+- **Install on Ubuntu:** use the `.deb` installer described below, then launch
+  **BridgeTruss** from the applications menu. No Python setup is required.
+- **Run from source:** follow the desktop or browser environment instructions below.
+
+The installed desktop application runs local analysis offline. The hosted browser
+application requires an internet connection. Save or download model JSON to move
+projects between the two interfaces.
 
 ## Features
 
@@ -22,6 +37,8 @@ educational analysis tool, not a certified bridge-design application.
 - Calculate joint displacements, support reactions, axial forces and stresses.
 - Inspect magnified deformation, signed force diagrams and numerical diagnostics.
 - Define a horizontal deck path and a two-axle vehicle with adjustable forces and spacing.
+- In the desktop and full web workspace, combine one to three Car/Bus/Truck vehicles with
+  independently editable axle forces, wheelbases and following gaps.
 - Calculate influence lines and complete moving-load envelopes with governing axle positions.
 - Compare layouts at equal material volume and explore height/member-area combinations.
 - Study stiffness reduction and member removal without modifying the active model.
@@ -29,11 +46,91 @@ educational analysis tool, not a certified bridge-design application.
 
 ## Installation
 
-### Requirements
+### Ubuntu desktop installer
+
+The standalone Debian package targets **Ubuntu 24.04 amd64**. It bundles Python,
+the desktop libraries, example models and the application icon. Users do not
+need a Python environment. Native graphics libraries are installed by APT;
+interactive 3D still requires compatible graphics drivers.
+
+From the directory containing a built installer:
+
+```bash
+sha256sum -c bridgetruss_0.1.0_amd64.deb.sha256
+sudo apt install ./bridgetruss_0.1.0_amd64.deb
+```
+
+The installer and checksum are generated locally in `dist/`; they are not
+committed to Git. Cloning the repository does not download a prebuilt installer.
+If you do not already have the `.deb`, build it using the instructions below
+or obtain it and its checksum from the person distributing the application.
+The initial installer is approximately 258 MiB and needs about 1.2 GiB installed,
+excluding any additional native dependencies.
+
+Launch **BridgeTruss** from the applications menu or run:
+
+```bash
+bridgetruss
+```
+
+Useful installation checks and fallback options:
+
+```bash
+bridgetruss --version
+bridgetruss --smoke-test
+bridgetruss --no-3d
+```
+
+The smoke test checks the application icon, default numerical result, project
+save/load, bundled examples and 3D-library imports without opening a window;
+it does not validate interactive OpenGL rendering. The `--no-3d` option starts
+the desktop interface without initializing the 3D renderer.
+
+The application is installed under `/opt/bridgetruss`, with a command in
+`/usr/bin/bridgetruss`. Bundled example JSON files are available in
+`/opt/bridgetruss/_internal/examples/`. Save your own projects to a writable
+location such as your Documents folder, not the installation directory.
+To uninstall, run `sudo apt remove bridgetruss`; user-saved projects are not
+part of the package and are not removed.
+
+### Build the Ubuntu installer
+
+Use the source branch containing `packaging/` and `scripts/build_deb.py`
+(currently `local/web-vehicle-review`).
+To build the installer on Ubuntu 24.04 amd64, use a dedicated Python 3.12
+environment. Install the native build tools first:
+
+```bash
+sudo apt install python3.12-venv dpkg desktop-file-utils
+```
+
+From the repository root:
+
+```bash
+python3.12 -m venv .venv-package
+source .venv-package/bin/activate
+python -m pip install -r requirements.txt -r packaging/requirements-build.txt
+python scripts/build_deb.py
+```
+
+The native build tools `dpkg-deb` and `desktop-file-validate` must be installed
+(Ubuntu packages `dpkg` and `desktop-file-utils`). Output is written to `dist/`:
+- `bridgetruss/`: standalone application directory; keep its contents together.
+- `bridgetruss_0.1.0_amd64.deb`: installable Debian package.
+- `bridgetruss_0.1.0_amd64.deb.sha256`: checksum for the installer.
+
+Allow several GiB of free disk space for the environment and build artifacts.
+Version information is maintained in `app_version.py`. Build outputs are ignored
+by Git. This build has not been validated on other Linux distributions or CPU
+architectures. Dependency versions in the build environment affect the artifact;
+this is a repeatable build procedure, not a guarantee of byte-identical output.
+
+### Source requirements
 
 - Git, if downloading the source by cloning the repository.
-- Python 3.10 or newer for the desktop source; Python 3.13 is the tested version
-  for both interfaces and is recommended for the pinned browser dependencies.
+- Python 3.10 or newer for the desktop source; Python 3.12 was used to build
+  and validate the Ubuntu installer. Python 3.13 is recommended for the pinned
+  browser dependencies; the hosted app has also been verified on Python 3.14.
 - An internet connection to install Python dependencies.
 - A desktop display for the Qt interface and a working OpenGL graphics stack for 3D.
 
@@ -42,10 +139,14 @@ independently verified. The commands below use a Linux/macOS shell.
 
 ### Download the source
 
-The browser interface and its configuration are on the `BridgeTruss` branch:
+The deployed full browser workspace tracks the `BridgeTruss` branch independently
+of the default `main` branch. This update combines the full workspace, installer,
+icons, analytical verification and guided demo on `local/web-vehicle-review`
+for review into `main`. Until that merge is complete, use the review branch
+for the combined source; the deployment branch alone does not contain the installer.
 
 ```bash
-git clone --branch BridgeTruss https://github.com/deskaygraphics/BridgeTruss.git
+git clone --branch local/web-vehicle-review https://github.com/deskaygraphics/BridgeTruss.git
 cd BridgeTruss
 ```
 
@@ -63,7 +164,6 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 For later sessions, activate the same environment and run `python main.py`.
-Close the window or press Ctrl+C in the launching terminal to exit cleanly.
 
 The desktop stack uses NumPy, PySide6, Matplotlib, PyVista and PyVistaQt.
 `requirements-dev.txt` adds testing and linting dependencies.
@@ -96,11 +196,10 @@ Open the local URL printed by Streamlit, usually `http://localhost:8501`.
 Keep the terminal running while using the application. Press Ctrl+C in that
 terminal to stop the server.
 
-The browser requirements install Streamlit, NumPy and Matplotlib; Qt and VTK are
-not required. Its interactive Canvas animation provides a projected 3D bridge
-with truck, passenger-car and bus models, without external JavaScript downloads.
-It does not include the desktop geometry editor or member picking.
-A localhost address is accessible on your own computer, not a public hosting URL.
+The browser requirements install Streamlit, NumPy, Matplotlib and Plotly; Qt and
+VTK are not required. Run from the repository root to use the included dark
+theme configuration. A localhost address is accessible on your own computer,
+not a public hosting URL.
 
 ## Desktop usage
 
@@ -130,27 +229,19 @@ A localhost address is accessible on your own computer, not a public hosting URL
 
 1. Use **Select Deck Nodes** to define the load-transfer path. Presets already
    select their bottom-chord deck joints.
-2. In **Moving Vehicle Loads** at the top of the right sidebar, choose **Number of
-   vehicles (1–3)**. For multiple vehicles, set **Gap between vehicles** (rear axle
-   of one vehicle to front axle of the next; default 4 m).
-3. Enable moving loads and enter the front/rear axle forces and axle spacing.
-   Every vehicle uses these same values; they are per-vehicle forces, not totals.
-   With two vehicles, the convoy is a **truck followed by a passenger car**; with
-   three, a **bus** follows the passenger car. Their bodies, colors, windows and
-   wheels are visually distinct. Types do not assign assumed axle weights:
-   numerical loads still come from the configured forces and axle spacing.
-4. Use the position slider or **Play** to inspect successive quasi-static states.
-   Open **Interactive 3D** to see all vehicles moving together. Playback continues
-   until the last vehicle's rear axle exits. The slider tracks the leading front axle.
+2. At the top of the right sidebar, set **Number of vehicles** (1–3). Added
+   followers default to Car and Bus, using the same presets as the full web workspace.
+3. Use **Edit individual vehicles…** to configure each type, axle forces,
+   wheelbase and rear-to-next-front axle gap. **Load preset** explicitly applies
+   that vehicle type's example forces/wheelbase. Changing a type alone preserves
+   custom loads. The main sidebar axle inputs edit vehicle 1 only.
+4. Enable moving loads, then use the leading-front position slider or **Play**
+   to inspect successive quasi-static states. Each vehicle contributes its own
+   two axle loads; static loads are counted once.
 5. Click **Compute Signed Envelopes** for minimum/maximum responses and the
    corresponding front-axle positions over the full crossing.
 6. Use **Influence Lines** for responses to a downward 1 N load; these exclude
    existing static loads.
-Count and gap are included in saved scenarios and exports. Existing project files
-without those settings open with one vehicle. The solver includes every axle in
-the convoy; the extra vehicles are not just visual copies. Selecting an axle in
-3D edits the shared front/rear force for every vehicle. Very small gaps can
-overlap the illustrative body overhangs; the specified axle positions remain exact.
 
 Existing static loads remain active unless explicitly removed with **Clear Static
 Loads**. Envelope accuracy does not depend on the animation step or frame rate.
@@ -181,20 +272,14 @@ force redistribution, nodal displacements and full-passage extrema. Force diagra
 use the same load position for every candidate; unrelated envelope peaks are not
 shown as one simultaneous load case. **Enlarge Comparison** opens a larger view.
 
-To run a supplied redundancy study, click **Open** and select
-`examples/redundant_bridge.json` (member **18**) or
-`examples/benchmark_redundant.json` (member **4**, static loading). In
-**Redundancy Study**, set the member and area factors, then click
-**Run Redundancy Study**. Rejected candidates display a reason instead of a finite
-response. These study files are separate from the moving-vehicle controls.
+To run the supplied redundant-bridge example:
 
-Within **Redundancy Study**, open **Analytical Verification** to run 49 comparisons
-against the supplied triangle's independent hand equations. The panel shows
-reference/computed values, units, absolute errors, tolerances, relative errors
-(where the reference is nonzero), and PASS/FAIL results. Use **Run Analytical
-Verification** to repeat the checks. This always checks the shipped static
-triangle, not the active project, and does not change your model, vehicle settings,
-or current study. Passing verifies those benchmark cases, not structural safety.
+1. Open `examples/redundant_bridge.json`.
+2. Select **Redundancy Study** and choose original member **18**.
+3. Keep the default area factors `1,0.75,0.5,0.25,0`, or enter your own.
+4. Click **Run Redundancy Study**, then choose a candidate to compare.
+5. Inspect the case summary, member-force changes and common-case displacements.
+   Rejected candidates display a reason instead of a finite response.
 
 **Design Exploration** evaluates a finite grid of heights and chord/web area factors.
 Feasibility means satisfying the entered displacement and axial-stress screening
@@ -207,6 +292,8 @@ Example models in `examples/` include:
 - `benchmark_redundant.json`: triangle with an added load path.
 - `pratt_vehicle.json`: planar bridge with a two-axle vehicle.
 - `redundant_bridge.json`: bridge with an additional diagonal; M18 can be studied.
+- `traffic_three_vehicles.json`: the redundant bridge with a Truck, Car and Bus
+  together (version 2; opens in the updated desktop and full web workspace).
 
 To generate reproducible redundancy results without opening the desktop interface:
 
@@ -225,7 +312,9 @@ studies, or use `--model`, `--member` and `--factors` to analyze another saved m
   `nodes.csv` and `analysis.json`. Calculated envelopes add `envelopes.csv`.
 - A calculated redundancy study adds `redundancy.json`, summary/member/node/envelope
   CSV files and PNG comparison figures.
-- Browser downloads provide a reproducible study JSON and a summary CSV.
+- Browser downloads provide desktop-compatible model JSON, member CSV,
+  displacement-history CSV, PNG figures and a ZIP of the result bundle.
+  Calculated redundancy studies add detailed study CSVs and comparison figures.
 
 Original member IDs are preserved within a redundancy study. Deleting a member
 from the active desktop model renumbers its remaining members.
@@ -290,54 +379,158 @@ These fast checks do not replace the test suite or analytical benchmarks.
 
 ## Browser usage
 
-After starting Streamlit using the installation instructions above:
+Open [the hosted app](https://bridgetrus.streamlit.app/), or start Streamlit
+locally using the installation instructions above:
 
-1. Choose an example:
-   - **Redundant bridge — remove M18:** compare the bridge with a weakened or removed
-     additional diagonal.
-   - **Redundant triangle — analytical check:** compare the static triangle with
-     its independently derived hand equations.
-   - **Determinate bridge — essential M1:** inspect the effect of weakening or
-     removing an essential member.
-2. Set **Selected member area remaining (%)**. Zero removes the member; the
-   original baseline is retained for comparison.
-3. For bridge examples, enable or disable **Include complete vehicle passage**.
-   Choose **Number of vehicles** (truck; truck + passenger car; or truck +
-   passenger car + bus) and **Gap between vehicles (m)**. Gap means rear axle of
-   one vehicle to front axle of the next. Expand **Axle forces and spacing
-   (per vehicle)** to adjust shared axle forces and wheelbase. Vehicle types are
-   visual, not assumed weights. The triangle always uses its prescribed static load.
-4. In **Animated moving vehicles — baseline**, use **Play/Pause**, **Reset**, the
-   leading-axle position slider, playback speed, camera view and deformation overlay.
-   Drag the scene to orbit. The live displacement readout includes static loads
-   and all active convoy axles, using the same solver response coefficients as desktop.
-   Playback speed is illustrative, not physical speed or a dynamic analysis.
-5. Click **Run example** to calculate the complete-passage study for the selected convoy.
-6. Inspect **Comparison figures**, **Numerical results**, and **Assumptions**.
-   Expand the independent-verification section for hand-reference values,
-   computed values, errors and tolerances.
-7. Download the study JSON or summary CSV if needed. The JSON records the vehicle
-   count, gap, and complete axle list used in the calculations.
+1. **Full workspace** starts with an analyzed Pratt truss. Use **New Project**
+   for an empty model, or the sidebar's **New / presets / open** section to
+   choose Pratt/Warren/Howe, open a supplied example, or upload desktop JSON.
+   Replacing a project requires confirmation.
+2. Expand sidebar tools to add/move nodes, attach/edit/delete members, assign
+   loads and supports, select deck joints or clear static loads. Submit the
+   relevant form to apply an edit. Incomplete drafts are allowed; **Undo last
+   edit** restores the previous model. Click **Analyze** after editing.
+3. Use **2D View**, **Axial Forces** and **Deformation** for interactive diagrams.
+   Scroll to zoom, drag to pan, or double-click to fit. **View controls** changes
+   labels, coloring and camera settings without changing structural results.
+4. **Interactive 3D** shows an illustrative extruded bridge, road and truck.
+   Drag to orbit. **Scene selection** highlights a node/member/load and exposes
+   edit/removal controls. Use **Add / attach member** to connect two joints.
+   Browser selection controls replace Qt's right-click picking; this is not a
+   pixel-identical Qt window.
+5. Apply **Moving vehicle loads** settings for the original truck or a
+   one-to-three-vehicle profile (see below). Use the slider or **Play / Pause /
+   Reset**. The 3D vehicles and wheels animate locally
+   in the browser between numerical response steps; the scene and camera stay
+   mounted rather than being rebuilt for every visual frame. The caption
+   distinguishes the visual front position from the solved position used by
+   tables, force colors and deformation. Response steps are nominally 250 ms;
+   delayed refreshes catch up using elapsed time without backfilling history.
+   Pause solves the current position. Playback is not physical time or dynamics.
+6. **Compute Signed Envelopes** evaluates the full passage independently of
+   playback. Other tabs provide influence lines, design exploration, redundancy
+   of any active member, displacement history and equal-volume comparisons.
+   The latter requires preset-compatible ten-node geometry.
+7. Expand **Save model / export results** below the tables. Save model JSON or
+   member CSV, or prepare a downloadable ZIP and PNG figures. Chart camera
+   buttons also download images, including the 3D view. Model saves retain the
+   existing stable/complete-model validation.
 
-Changing an input clears the previous result; click **Run example** again.
-The animation always shows the unmodified baseline, even when a member-removal
-candidate is rejected. It is not a prediction of that candidate's movement.
-The study plots show labeled common-load-case and envelope results, not the live
-animation position.
-An accepted stiffness solution is not a structural safety assessment.
+On phones, the model sidebar starts collapsed; use the top-left sidebar arrow
+to open it and the sidebar's collapse button to close it again. The toolbar's
+**Controls** switch opens vehicle and view settings in a floating, independently
+scrollable panel; **Hide controls** closes it. Hidden panels preserve settings,
+form inputs and analysis results. On larger screens, Controls toggles the
+right-hand column and hiding it expands the dashboard. Your panel choice is
+retained when resizing or rotating the browser.
+
+Each browser session owns its own model and results; refreshing/reconnecting
+can start a new session, so download your model before closing the page.
+Model/vehicle changes clear affected results and playback history. Manual
+position changes and Reset clear history; the latest 1000 solved frames are
+retained. The interactive workspace allows up to 200 nodes, 800 members and
+2 MB model uploads to bound per-session computation.
+
+Choose **Guided demo** in the sidebar for the original preset-based audience
+examples, independent triangle checks and study downloads. It does not modify
+the full workspace's model.
+
+An accepted stiffness solution is not a structural safety assessment. Both
+interfaces share the solver, model format and engineering limitations;
+decorative 3D geometry adds no stiffness, mass or self-weight.
+
+### Two or three simultaneous vehicles (full web workspace)
+
+1. Open **Controls → Moving vehicle loads** and set **Number of vehicles** to
+   2 or 3. For a ready-made example, open `traffic_three_vehicles.json` from
+   **Supplied model** and click **Analyze**.
+2. Choose each vehicle's type. **Load preset for vehicle N** explicitly fills
+   example axle forces/wheelbase; merely changing the type does not overwrite
+   your custom values. The illustrative presets are Truck: 80/120 kN, 4 m;
+   Car: 8/7 kN, 2.7 m; Bus: 50/90 kN, 6 m. These are not regulatory design vehicles.
+3. Edit individual axle forces, wheelbases and follower gaps. Traffic-profile
+   wheelbases must be at least 1.2 m. A gap is measured from the previous
+   vehicle's **rear axle to the next front axle**, not bumper to bumper;
+   minimum 2 m, default 3 m. The original single-truck form retains its
+   legacy input range, including compact schematic axle pairs.
+4. Check **Enable moving loads**, then **Apply traffic settings**. A draft
+   warning means the inputs are not applied yet; figures/results still use
+   the displayed **Applied traffic** configuration.
+5. Use **Leading front axle position (%)**, **Play / Pause / Reset** and
+   **Interactive 3D**. Each vehicle has its own mesh and follows at a fixed
+   offset with the same direction and playback clock. Traffic profiles include
+   a one-metre visual margin at entry/exit so the bodies as well as all axles
+   clear the bridge. Original single-truck position mapping is unchanged.
+
+All active axle loads are combined with the static loads **once**. Current
+response, signed envelopes, design comparisons, redundancy studies and history
+use the applied traffic. The 2D diagrams show the combined nodal loads.
+Influence lines remain unit-load responses, independent of configured traffic.
+For traffic profiles, every reported `front_x_m`/front-position column means the
+**leading vehicle's front axle**, not a follower's position. The vehicle table
+shows individual front positions. Envelopes cover the passage of this particular
+fixed formation; they do not optimize independently placed vehicles, gaps or speeds.
+No opposing traffic, overtaking, collisions, dynamics or extra self-weight is modeled.
+
+The original single Truck still saves **version 1** JSON and opens on desktop.
+Car/Bus and multiple-vehicle profiles save **version 2**, including all vehicle
+types, forces, wheelbases and gaps. Both updated interfaces can open these files,
+validate the same control precision, and calculate using the same complete axle list
+and leading-front positions. Older desktop versions reject version-2 profiles;
+update them before opening these files. Returning to a single Truck and applying settings
+restores version-1 saves.
+
+Result ZIPs include the complete versioned model plus traffic definitions and
+flattened axle offsets/forces in `analysis.json`; studies retain their position
+reference. The redundancy CLI also reads version-2 files and uses every axle.
+The guided demo also offers one-to-three-vehicle convoys and a self-contained
+baseline animation. Unlike the full workspace, its vehicles share the same
+configured axle forces and wheelbase; their truck/car/bus shapes are illustrative.
+The single-truck default retains its verified results.
+
+Older version-1 convoy files with `vehicle_count` and `vehicle_gap_m` retain
+their numerical axle definitions. The updated desktop and full web workspace
+convert compatible convoys into independently editable profiles; subsequent
+multi-vehicle saves use version 2. Files outside the current profile limits
+(for example, a follower gap below 2 m or excessive control precision) are
+rejected before replacing the active model, rather than silently adjusted.
 
 ### Browser tests
 
 With the browser environment activated:
 
 ```bash
-python -m pip install -r web/requirements-dev.txt
+python -m pip install pytest
 python -m pytest web -q
 ```
+The browser suite covers atomic model edits, undo, session isolation,
+desktop-compatible JSON/scenario round trips, numerical parity, invalidation,
+history, exports and Streamlit interactions. An additional opt-in test exercises
+real Chrome, including WebGL views, playback, uploads, downloaded files,
+phone-width layouts, panel toggles, independent scrolling, simultaneous traffic,
+and versioned project save/reopen.
+With Playwright and Google Chrome installed and the local server running:
 
-Browser animation tests use Playwright with a separate headless Chrome/Chromium
-session and never use your browser profile. If Chrome/Chromium is not on `PATH`,
-those browser checks are skipped; numerical and Streamlit tests still run.
+```bash
+BRIDGETRUSS_WEB_BROWSER=1 python -m pytest web/test_browser.py -q
+```
+
+Set `BRIDGETRUSS_CHROME` if Chrome is installed outside `/usr/bin/google-chrome`.
+If another app is already using port 8501, run this checkout on another port,
+then point browser verification to that server:
+
+```bash
+python -m streamlit run web/app.py --server.port 8502
+```
+
+In another terminal using this checkout and environment:
+
+```bash
+BRIDGETRUSS_WEB_BROWSER=1 BRIDGETRUSS_WEB_URL=http://127.0.0.1:8502/ python -m pytest web/test_browser.py -q
+```
+
+Check that the page heading says **BridgeTruss | Planar Analysis** and the sidebar
+offers **Full workspace**, rather than testing an older guided-demo checkout.
 
 ## Troubleshooting
 
@@ -345,13 +538,19 @@ those browser checks are skipped; numerical and Streamlit tests still run.
   its requirements using `python -m pip`. Desktop and browser dependencies are separate.
 - **Qt xcb cursor error on Ubuntu:** check that the system package
   `libxcb-cursor0` is installed.
-- **OpenGL or 3D initialization failure:** the application checks Qt's OpenGL
-  context before initializing 3D. If initialization or a rendering operation raises
-  an exception, the 3D tab displays the reason while 2D analysis remains available.
-  The launcher removes an inherited `QT_XCB_GL_INTEGRATION=none` override when
-  3D is enabled so Qt can select GLX/EGL; explicit backend choices are preserved.
-  Use `BRIDGETRUSS_NO_3D=1 python main.py` to skip 3D entirely, including when a
-  graphics driver crashes or hangs in native code (which Python cannot catch).
+- **OpenGL or 3D initialization failure:** try `BRIDGETRUSS_NO_3D=1 python main.py`
+  from source, or `bridgetruss --no-3d` for the installed application.
+- **Installer architecture or dependency error:** the initial `.deb` targets
+  Ubuntu 24.04 amd64, not ARM, Windows, macOS or older Ubuntu versions. Install
+  it with `sudo apt install ./bridgetruss_0.1.0_amd64.deb` so APT can resolve
+  native dependencies.
+- **Installed application does not start:** run `bridgetruss` from a terminal
+  to see diagnostics, then try `bridgetruss --smoke-test` and `bridgetruss --no-3d`.
+- **Streamlit import error after a code update:** inspect the full deployment
+  logs for the missing symbol and check the configured branch and entry point
+  (`BridgeTruss`, `web/app.py` for the hosted workspace). Rebooting the app clears
+  stale Python modules. The startup code refreshes watched dependencies before
+  importing their consumers.
 - **Unstable or ill-conditioned model:** review supports, connectivity and member
   properties. The solver does not add artificial stiffness to conceal instability.
 - **Invalid deck path:** select at least two distinct existing joints at a common

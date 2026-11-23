@@ -7,7 +7,7 @@ from pathlib import Path
 
 from persistence import export_redundancy, load_model
 from redundancy import redundancy_study
-from moving_loads import scenario_axles
+from traffic import scenario_axles
 
 
 EXAMPLES = Path(__file__).resolve().parent / "examples"

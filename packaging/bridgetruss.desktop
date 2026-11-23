@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=BridgeTruss
+Comment=Planar bridge truss analysis and visualization
+Exec=bridgetruss
+Icon=bridgetruss
+Terminal=false
+Categories=Science;Engineering;
+StartupNotify=true
+StartupWMClass=bridgetruss

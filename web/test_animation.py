@@ -10,7 +10,7 @@ import pytest
 from example_studies import PRESETS, run_example, vehicle_example
 from moving_loads import MovingResponse, convoy_axles
 from redundancy import redundancy_study
-from web.animation import animation_payload, animation_html
+from web.demo_animation import animation_payload, animation_html
 
 
 BRIDGE = next(iter(PRESETS))
@@ -165,7 +165,7 @@ def test_streamlit_convoy_selection_invalidation_and_static_triangle():
     pytest.importorskip("streamlit")
     from streamlit.testing.v1 import AppTest
 
-    app = AppTest.from_file(str(Path(__file__).with_name("app.py")), default_timeout=30).run()
+    app = AppTest.from_file(str(Path(__file__).with_name("demo_app.py")), default_timeout=30).run()
     app.selectbox(key="vehicle_count").select(3).run()
     assert not app.exception
     assert not app.number_input(key="vehicle_gap").disabled

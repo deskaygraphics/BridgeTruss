@@ -24,6 +24,18 @@ from test_scene3d import NoRenderPlotter
 from test_gui import app as app, window as window
 
 
+def configure_convoy(window, count=3, gap=4.0):
+    """Exercise identical axle loads through the current per-vehicle interface."""
+    from traffic import preset_vehicle
+
+    vehicles = []
+    for index, kind in enumerate(("Truck", "Car", "Bus")[:count]):
+        vehicle = preset_vehicle(kind, 0 if index == 0 else gap)
+        vehicle.update(front_N=80000.0, rear_N=120000.0, spacing_m=4.0)
+        vehicles.append(vehicle)
+    window.configure_traffic(vehicles)
+
+
 @pytest.mark.parametrize("count", [1, 2, 3])
 def test_convoy_force_moment_and_response(count):
     model = Model()
@@ -105,7 +117,7 @@ def test_scene_builds_and_reuses_separate_vehicle_actors(count):
         for actor, part in scene._vehicle_parts
         if part.role in ("cab", "passenger_body", "bus_body")
     ]
-    assert scene._vehicle_types == ["truck", "passenger", "bus"][:count]
+    assert scene._vehicle_types == ["Truck", "Car", "Bus"][:count]
     assert len(cabs) == count
     assert [actor.position[0] for actor, _ in cabs] == [22 - 8 * i for i in range(count)]
     assert len(scene._vehicle_arrows) == 2 * count
@@ -133,7 +145,7 @@ def test_count_change_rebuilds_and_follow_camera_works():
     scene.render(model, vehicle=(22, 18, 80, 120, 0, 25, 0.18, 3, 4))
     assert scene.generation == generation + 1
     scene._picked(scene._vehicle_arrows[-1])
-    assert selected == [("axle", 1)]
+    assert selected == [("axle", 5)]
     scene.set_camera("Follow vehicle")
     previous = scene.plotter.camera_position
     scene.update_vehicle((23, 19, 80, 120, 0, 25, 0.18, 3, 4))
@@ -144,13 +156,13 @@ def test_desktop_count_controls_physics_playback_and_exit(window, monkeypatch):
     w = window
     assert w.vehicle_count.minimum() == 1
     assert w.vehicle_count.maximum() == 3
-    assert not w.vehicle_gap.isEnabled()
     w.vehicle_count.setValue(3)
-    assert w.vehicle_gap.isEnabled()
+    assert len(w.traffic_vehicles()) == 3
+    configure_convoy(w)
     w.moving_toggle.setChecked(True)
     w.vehicle_position.setValue(489)  # all six axles are on the 25 m deck
     assert len(w.axles()) == 6
-    assert w.vehicle_visual()[7:] == (3, 4)
+    assert len(w.vehicle_visual()[7]) == 3
     assert -sum(fy for fx, fy in w.vehicle_nodal_loads().values()) == pytest.approx(600000)
     direct = w.model.solve(combined_loads(w.model, w.front_position(), w.axles()))
     np.testing.assert_allclose(w.model.results["U"], direct["U"])
@@ -158,7 +170,7 @@ def test_desktop_count_controls_physics_playback_and_exit(window, monkeypatch):
     monkeypatch.setattr("main.time.monotonic", lambda: clock[0])
     w.play_pause()
     assert w.play_timer.isActive()
-    w.vehicle_gap.setValue(5)
+    configure_convoy(w, gap=5)
     assert not w.play_timer.isActive()
     assert not w.displacement_history
     assert w.redundancy is None
@@ -175,8 +187,7 @@ def test_desktop_count_controls_physics_playback_and_exit(window, monkeypatch):
 def test_desktop_convoy_roundtrip_and_legacy_reset(window, monkeypatch, tmp_path):
     w = window
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
-    w.vehicle_count.setValue(3)
-    w.vehicle_gap.setValue(6.25)
+    configure_convoy(w, gap=6.25)
     w.moving_toggle.setChecked(True)
     path = tmp_path / "convoy.json"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(path), ""))
@@ -189,8 +200,8 @@ def test_desktop_convoy_roundtrip_and_legacy_reset(window, monkeypatch, tmp_path
     legacy = Path(__file__).parent / "examples" / "pratt_vehicle.json"
     assert w.load_project(legacy)
     assert w.vehicle_count.value() == 1
-    assert w.vehicle_gap.value() == 4
-    assert not w.vehicle_gap.isEnabled()
+    assert w._traffic_vehicles is None
+    assert len(w.axles()) == 2
     assert not w.test_errors
 
 
@@ -205,11 +216,10 @@ def test_gap_precision_rejected_before_replacing_project(window, tmp_path):
 
 def test_convoy_axle_edit_and_undo(window):
     w = window
-    w.vehicle_count.setValue(3)
-    w.vehicle_gap.setValue(5.5)
+    configure_convoy(w, gap=5.5)
     before = w.scenario()
     w.change_axle_3d(0, 100, 6)
-    assert all(force == 100000 for _, force in w.axles()[::2])
+    assert [force for _, force in w.axles()[::2]] == [100000, 80000, 80000]
     w.undo_3d_edit()
     assert w.scenario() == before
     assert not w.test_errors
@@ -227,3 +237,47 @@ def test_cli_uses_saved_convoy(window, tmp_path):
     )
     study = json.loads((output / "redundancy.json").read_text())
     assert len(study["axles_offset_m_force_N"]) == 6
+
+
+def test_legacy_convoy_opens_as_equivalent_editable_profile(window, monkeypatch, tmp_path):
+    from traffic import scenario_axles as profile_axles
+    from web.workspace import Workspace
+
+    legacy = {
+        **window.scenario(),
+        "enabled": True,
+        "vehicle_count": 3,
+        "vehicle_gap_m": 5.5,
+    }
+    path = tmp_path / "old-convoy.json"
+    save_model(path, window.model, legacy)
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+    assert window.load_project(path)
+    expected = scenario_axles(legacy)
+    assert window.axles() == expected
+    assert len(window.scenario()["vehicles"]) == 3
+    workspace = Workspace()
+    workspace.load_json(path.read_bytes())
+    assert profile_axles(workspace.scenario) == expected
+    assert json.loads(workspace.model_json())["schema_version"] == 2
+
+
+@pytest.mark.parametrize("gap", [1.0, 3.001])
+def test_legacy_convoy_outside_ui_limits_does_not_replace_model(
+    window,
+    tmp_path,
+    gap,
+):
+    from web.workspace import Workspace
+
+    path = tmp_path / "old-convoy.json"
+    state = {**window.scenario(), "vehicle_count": 3, "vehicle_gap_m": gap}
+    save_model(path, window.model, state)
+    original = window.model
+    assert not window.load_project(path)
+    assert window.model is original
+    workspace = Workspace()
+    original_json = workspace.model_json()
+    with pytest.raises(ValueError):
+        workspace.load_json(path.read_bytes())
+    assert workspace.model_json() == original_json

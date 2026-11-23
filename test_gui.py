@@ -32,6 +32,54 @@ def window(app, monkeypatch):
     app.processEvents()
 
 
+def test_window_icon_loads_outside_project_directory(app, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    instance = Main()
+    try:
+        assert not instance.windowIcon().isNull()
+        pixmap = instance.windowIcon().pixmap(64, 64)
+        assert not pixmap.isNull()
+        assert pixmap.width() == pixmap.height() == 64
+    finally:
+        instance.close()
+        app.processEvents()
+
+
+def test_traffic_project_requires_confirmation_then_loads_on_desktop(window, monkeypatch, tmp_path):
+    from traffic import preset_vehicle
+
+    w = window
+    original_model = w.model
+    original_scenario = w.scenario()
+    path = tmp_path / "traffic.json"
+    save_model(
+        path,
+        w.model,
+        {
+            "enabled": True,
+            "position_fraction": 0.5,
+            "vehicles": [preset_vehicle("Truck"), preset_vehicle("Car", 3)],
+        },
+    )
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(path), ""))
+    questions = []
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *args: questions.append(args) or QMessageBox.No
+    )
+    w.open_project()
+    assert w.model is original_model
+    assert w.scenario() == original_scenario
+    assert len(questions) == 1
+    assert not w.test_errors
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+    w.open_project()
+    assert w.model is not original_model
+    assert [vehicle["kind"] for vehicle in w.traffic_vehicles()] == ["Truck", "Car"]
+    assert len(w.axles()) == 4
+    assert w.model.results is not None
+    assert not w.test_errors
+
+
 @pytest.mark.parametrize("stage", ["preflight", "interactor", "scene"])
 def test_3d_startup_failure_keeps_analysis_available(app, monkeypatch, stage):
     from PySide6.QtWidgets import QWidget

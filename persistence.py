@@ -7,12 +7,13 @@ from pathlib import Path
 import numpy as np
 from bridge_model import Model, Member
 from solver import PreparedTruss
-from moving_loads import deck_path, scenario_axles
+from moving_loads import deck_path
+from traffic import positioned_vehicles, scenario_axles, traffic_scenario, validate_scenario
 
 
 def model_document(model, scenario=None):
     return {
-        "schema_version": 1,
+        "schema_version": 2 if traffic_scenario(scenario) else 1,
         "units": "SI: m, N, Pa",
         "dimension": 2,
         "kind": model.kind,
@@ -29,8 +30,13 @@ def model_document(model, scenario=None):
 
 
 def validate_document(doc):
-    if doc["schema_version"] != 1 or doc["dimension"] != 2 or doc["units"] != "SI: m, N, Pa":
-        raise ValueError("Only version 1 planar SI model files are supported")
+    if (
+        type(doc["schema_version"]) is not int
+        or doc["schema_version"] not in (1, 2)
+        or doc["dimension"] != 2
+        or doc["units"] != "SI: m, N, Pa"
+    ):
+        raise ValueError("Only version 1 or 2 planar SI model files are supported")
     model = Model()
     model.clear()
     model.kind = str(doc["kind"])
@@ -52,26 +58,10 @@ def validate_document(doc):
     PreparedTruss(model.to_solver())
     if model.deck_nodes:
         deck_path(model)
-    scenario = doc.get("scenario", {})
-    if not isinstance(scenario, dict):
-        raise ValueError("Scenario must be an object")
+    scenario = validate_scenario(doc.get("scenario", {}))
+    if (doc["schema_version"] == 2) != traffic_scenario(scenario):
+        raise ValueError("Version 1 uses a single truck; version 2 requires a traffic profile")
     if scenario:
-        required = {"enabled", "front_N", "rear_N", "spacing_m", "position_fraction"}
-        optional = {"vehicle_count", "vehicle_gap_m"}
-        if not required <= set(scenario) or set(scenario) - required - optional:
-            raise ValueError("Invalid vehicle scenario fields")
-        scenario_axles(scenario)
-        fraction = scenario["position_fraction"]
-        if (
-            type(scenario["enabled"]) is not bool
-            or not np.isfinite(fraction)
-            or not 0 <= fraction <= 1
-        ):
-            raise ValueError("Invalid vehicle scenario state")
-        if scenario["front_N"] > 1e8 or scenario["rear_N"] > 1e8 or scenario["spacing_m"] > 1000:
-            raise ValueError("Vehicle exceeds dashboard input limits")
-        if scenario.get("vehicle_gap_m", 4.0) > 1000:
-            raise ValueError("Vehicle gap exceeds dashboard input limits")
         if scenario["enabled"]:
             deck_path(model)
     return model, scenario
@@ -171,6 +161,13 @@ def export_results(
         "redundancy_study": redundancy,
         "limitations": "No member buckling, dynamics, spatial stability or code certification.",
     }
+    if traffic_scenario(scenario):
+        metadata["traffic"] = {
+            "position_reference": "leading vehicle front axle x (m)",
+            "vehicles": positioned_vehicles(scenario),
+            "axles_offset_m_force_N": scenario_axles(scenario),
+            "motion": "fixed relative spacing, common direction and playback clock",
+        }
     (directory / "analysis.json").write_text(
         json.dumps(metadata, indent=2, default=_plain, allow_nan=False) + "\n", encoding="utf-8"
     )
