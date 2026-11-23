@@ -17,6 +17,7 @@ pytestmark = pytest.mark.skipif(
     reason="Set BRIDGETRUSS_WEB_BROWSER=1 with a local server running",
 )
 ROOT = Path(__file__).resolve().parents[1]
+BASE_URL = os.environ.get("BRIDGETRUSS_WEB_URL", "http://127.0.0.1:8501/")
 
 
 def settle_controls(page, visible=True, allow_playing=False):
@@ -45,7 +46,7 @@ def test_full_workspace_in_chrome(tmp_path):
         page = context.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
-        page.goto("http://127.0.0.1:8501/")
+        page.goto(BASE_URL)
         page.get_by_role("heading", name="BridgeTruss | Planar Analysis", exact=True).wait_for()
         page.get_by_test_id("stMetricValue").first.wait_for()
 
@@ -69,7 +70,7 @@ def test_full_workspace_in_chrome(tmp_path):
         ready()
         second = browser.new_context()
         other = second.new_page()
-        other.goto("http://127.0.0.1:8501/")
+        other.goto(BASE_URL)
         other.get_by_test_id("stMetricValue").first.wait_for()
         original = other.get_by_test_id("stMetricValue").first.inner_text()
 
@@ -181,7 +182,7 @@ def test_right_controls_scroll_without_moving_dashboard(viewport):
             headless=True,
         )
         page = browser.new_page(viewport=viewport)
-        page.goto("http://127.0.0.1:8501/")
+        page.goto(BASE_URL)
         panel = page.locator(".st-key-right_controls")
         settle_controls(page)
         page.wait_for_function("""() => {
@@ -226,7 +227,7 @@ def test_phone_panels_reopen_without_losing_settings(width, height, tmp_path):
         page = browser.new_page(
             viewport={"width": width, "height": height}, is_mobile=True, has_touch=True
         )
-        page.goto("http://127.0.0.1:8501/")
+        page.goto(BASE_URL)
         chart = page.get_by_test_id("stPlotlyChart")
         chart.wait_for()
         panel = page.locator(".st-key-right_controls")
@@ -282,7 +283,7 @@ def test_desktop_controls_toggle_expands_dashboard_and_preserves_choice():
             headless=True,
         )
         page = browser.new_page(viewport={"width": 1680, "height": 1050})
-        page.goto("http://127.0.0.1:8501/")
+        page.goto(BASE_URL)
         panel = page.locator(".st-key-right_controls")
         settle_controls(page)
         chart = page.get_by_test_id("stPlotlyChart")
@@ -326,7 +327,7 @@ def test_simultaneous_traffic_loads_animates_and_reopens(count, width, tmp_path)
         )
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
-        page.goto("http://127.0.0.1:8501/")
+        page.goto(BASE_URL)
         page.get_by_test_id("stPlotlyChart").wait_for()
         if width < 768:
             settle_controls(page, False)
@@ -454,7 +455,7 @@ def test_smooth_motion_keeps_scene_and_camera_mounted():
             args=["--enable-unsafe-swiftshader"],
         )
         page = browser.new_page(viewport={"width": 1680, "height": 1050})
-        page.goto("http://127.0.0.1:8501/")
+        page.goto(BASE_URL)
         page.get_by_role("tab", name="Interactive 3D", exact=True).click()
         host = page.get_by_test_id("bridge-live-scene")
         host.locator("canvas").first.wait_for()

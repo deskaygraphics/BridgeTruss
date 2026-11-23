@@ -31,7 +31,7 @@ def window(app, monkeypatch):
     app.processEvents()
 
 
-def test_traffic_project_is_rejected_before_replacing_desktop_model(window, monkeypatch, tmp_path):
+def test_traffic_project_requires_confirmation_then_loads_on_desktop(window, monkeypatch, tmp_path):
     from traffic import preset_vehicle
 
     w = window
@@ -55,8 +55,15 @@ def test_traffic_project_is_rejected_before_replacing_desktop_model(window, monk
     w.open_project()
     assert w.model is original_model
     assert w.scenario() == original_scenario
-    assert not questions
-    assert len(w.test_errors) == 1 and "web workspace" in w.test_errors[0]
+    assert len(questions) == 1
+    assert not w.test_errors
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+    w.open_project()
+    assert w.model is not original_model
+    assert [vehicle["kind"] for vehicle in w.traffic_vehicles()] == ["Truck", "Car"]
+    assert len(w.axles()) == 4
+    assert w.model.results is not None
+    assert not w.test_errors
 
 
 def test_analysis_tabs_and_failure_invalidation(window):

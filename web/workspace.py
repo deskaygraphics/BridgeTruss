@@ -25,7 +25,13 @@ from moving_loads import (
 )
 from persistence import export_results, model_document, validate_document
 from redundancy import redundancy_study
-from traffic import positioned_vehicles, scenario_axles, traffic_scenario, validate_scenario
+from traffic import (
+    positioned_vehicles,
+    scenario_axles,
+    traffic_scenario,
+    validate_scenario,
+    validate_control_precision,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -259,27 +265,7 @@ class Workspace:
 
     @staticmethod
     def validate_precision(scenario):
-        # Keep saved values representable by their UI controls, without silent rounding.
-        groups = (
-            [(f"Vehicle {i + 1} ", v) for i, v in enumerate(scenario["vehicles"])]
-            if traffic_scenario(scenario)
-            else [("", scenario)]
-        )
-        for prefix, values in [("", {"position_fraction": scenario["position_fraction"]}), *groups]:
-            for key, divisor, decimals in [
-                ("front_N", 1000, 2),
-                ("rear_N", 1000, 2),
-                ("spacing_m", 1, 2),
-                ("gap_m", 1, 2),
-                ("position_fraction", 1, 3),
-            ]:
-                if key not in values:
-                    continue
-                value = values[key] / divisor
-                if not np.isclose(value, round(value, decimals), rtol=1e-12, atol=1e-12):
-                    raise ValueError(
-                        f"{prefix}{key} exceeds control precision; adjust it explicitly"
-                    )
+        validate_control_precision(scenario)
 
     def configure(self, enabled, front_N, rear_N, spacing_m, step):
         scenario = {
